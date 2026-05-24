@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import MarkdownIt from "markdown-it";
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
@@ -50,11 +51,21 @@
   type FlatNode = TreeNode & { depth: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
   type Locale = "zh-CN" | "en";
-  type StatusKey = "loading" | "indexing" | "ready" | "opening" | "error";
+  type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
   type MessagePack = {
     docs: string;
     diagrams: string;
     refresh: string;
+    memoryRepo: string;
+    repoPathPlaceholder: string;
+    browse: string;
+    openRepo: string;
+    changeRepo: string;
+    chooseRepoTitle: string;
+    noRepoTitle: string;
+    noRepoBody: string;
+    noRepoSelected: string;
+    chooseRepoFirst: string;
     searchPlaceholder: string;
     memoryFiles: string;
     noMatches: string;
@@ -85,13 +96,23 @@
     folderTitles: Record<string, string>;
   };
 
-  const repoPath = "/Users/god/project/easy-kid-mem";
   const localeStorageKey = "memView.locale";
+  const repoPathStorageKey = "memView.repoPath";
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
       diagrams: "图",
       refresh: "刷新",
+      memoryRepo: "记忆库",
+      repoPathPlaceholder: "选择或输入记忆库目录",
+      browse: "选择",
+      openRepo: "打开记忆库",
+      changeRepo: "切换记忆库",
+      chooseRepoTitle: "选择记忆库目录",
+      noRepoTitle: "选择一个本地记忆库",
+      noRepoBody: "memView 不再固定打开某个目录。请选择一个包含 Markdown 记忆文件的本地文件夹。",
+      noRepoSelected: "未选择记忆库",
+      chooseRepoFirst: "先选择记忆库",
       searchPlaceholder: "搜索标题或路径",
       memoryFiles: "记忆文件",
       noMatches: "没有匹配",
@@ -117,6 +138,7 @@
       closeDiagram: "关闭图",
       enlargeDiagram: "放大图",
       status: {
+        idle: "待选择",
         loading: "加载中",
         indexing: "索引中",
         ready: "就绪",
@@ -149,6 +171,16 @@
       docs: "docs",
       diagrams: "diagrams",
       refresh: "Refresh",
+      memoryRepo: "Memory Repo",
+      repoPathPlaceholder: "Choose or enter a memory repo folder",
+      browse: "Choose",
+      openRepo: "Open Repo",
+      changeRepo: "Change Repo",
+      chooseRepoTitle: "Choose Memory Repo",
+      noRepoTitle: "Choose a local memory repo",
+      noRepoBody: "memView no longer opens a fixed folder. Choose a local folder that contains Markdown memory files.",
+      noRepoSelected: "No repo selected",
+      chooseRepoFirst: "Choose a repo first",
       searchPlaceholder: "Search title or path",
       memoryFiles: "Memory files",
       noMatches: "No matches",
@@ -174,6 +206,7 @@
       closeDiagram: "Close diagram",
       enlargeDiagram: "Enlarge diagram",
       status: {
+        idle: "Choose Repo",
         loading: "Loading",
         indexing: "Indexing",
         ready: "Ready",
@@ -219,8 +252,10 @@
   let current: Document | null = null;
   let renderedHtml = "";
   let query = "";
-  let status: StatusKey = "loading";
+  let status: StatusKey = "idle";
   let error = "";
+  let repoPath = getInitialRepoPath();
+  let pendingRepoPath = repoPath;
   let contextOpen = true;
   let zoomedDiagramHtml = "";
   let zoomedDiagramTitle = "";
@@ -237,14 +272,19 @@
 
   $: t = messages[locale];
   $: flatTree = snapshot ? flattenTree(snapshot.tree) : [];
-  $: visibleNodes = query.trim() ? flattenDocs(searchDocs(snapshot?.docs ?? [], query)) : flatTree;
-
-  loadRepo();
+  $: visibleNodes = snapshot
+    ? query.trim()
+      ? flattenDocs(searchDocs(snapshot.docs, query))
+      : flatTree
+    : [];
 
   onMount(() => {
     document.documentElement.lang = locale;
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
+    if (repoPath) {
+      void loadRepo(repoPath);
+    }
   });
 
   onDestroy(() => {
@@ -262,6 +302,14 @@
 
     const browserLanguage = typeof navigator === "undefined" ? "" : navigator.language.toLowerCase();
     return browserLanguage.startsWith("zh") ? "zh-CN" : "en";
+  }
+
+  function getInitialRepoPath() {
+    if (typeof localStorage === "undefined") {
+      return "";
+    }
+
+    return localStorage.getItem(repoPathStorageKey) ?? "";
   }
 
   function setLocale(nextLocale: Locale) {
@@ -300,11 +348,47 @@
     return node.path ? node.title : t.folderTitles[node.title] ?? node.title;
   }
 
-  async function loadRepo() {
+  async function browseRepo() {
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: t.chooseRepoTitle
+    });
+
+    if (typeof selected !== "string") {
+      return;
+    }
+
+    pendingRepoPath = selected;
+    await loadRepo(selected);
+  }
+
+  function handleRepoInputKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter") {
+      void loadRepo(pendingRepoPath);
+    }
+  }
+
+  async function loadRepo(path = repoPath) {
+    const nextRepoPath = path.trim();
+    if (!nextRepoPath) {
+      status = "idle";
+      snapshot = null;
+      current = null;
+      renderedHtml = "";
+      error = "";
+      return;
+    }
+
     status = "indexing";
     error = "";
     try {
-      snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath });
+      snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
+      repoPath = snapshot.root_path;
+      pendingRepoPath = snapshot.root_path;
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(repoPathStorageKey, snapshot.root_path);
+      }
       status = "ready";
       const entry =
         snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
@@ -314,16 +398,24 @@
         await openDocument(entry.path);
       }
     } catch (err) {
+      snapshot = null;
+      current = null;
+      renderedHtml = "";
       error = String(err);
       status = "error";
     }
   }
 
   async function openDocument(path: string) {
+    if (!repoPath) {
+      status = "idle";
+      return;
+    }
+
     status = "opening";
     error = "";
     try {
-      current = await invoke<Document>("read_document", { path });
+      current = await invoke<Document>("read_document", { repoPath, path });
       renderedHtml = renderMarkdown(current.markdown);
       status = "ready";
       await tick();
@@ -635,10 +727,32 @@
         <h1>memView</h1>
         <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
       </div>
-      <button class="ghost" type="button" on:click={loadRepo}>{t.refresh}</button>
+      <button class="ghost" type="button" disabled={!repoPath} on:click={() => loadRepo(repoPath)}>{t.refresh}</button>
     </div>
 
-    <input class="search" bind:value={query} placeholder={t.searchPlaceholder} />
+    <section class="repo-picker">
+      <label for="repo-path">{t.memoryRepo}</label>
+      <div class="repo-path-row">
+        <input
+          id="repo-path"
+          bind:value={pendingRepoPath}
+          placeholder={t.repoPathPlaceholder}
+          spellcheck="false"
+          on:keydown={handleRepoInputKeydown}
+        />
+        <button class="ghost" type="button" on:click={browseRepo}>{t.browse}</button>
+      </div>
+      <button
+        class="repo-open"
+        type="button"
+        disabled={!pendingRepoPath.trim()}
+        on:click={() => loadRepo(pendingRepoPath)}
+      >
+        {snapshot ? t.changeRepo : t.openRepo}
+      </button>
+    </section>
+
+    <input class="search" bind:value={query} placeholder={t.searchPlaceholder} disabled={!snapshot} />
 
     <nav class="tree" aria-label={t.memoryFiles}>
       {#if visibleNodes.length}
@@ -658,7 +772,7 @@
           </button>
         {/each}
       {:else}
-        <div class="empty">{t.noMatches}</div>
+        <div class="empty">{snapshot ? t.noMatches : t.chooseRepoFirst}</div>
       {/if}
     </nav>
   </aside>
@@ -667,8 +781,8 @@
     <header class="reader-head">
       <div>
         <div class="eyebrow">{formatKind(current?.kind ?? "repo")}</div>
-        <h2>{current?.title ?? t.status.loading}</h2>
-        <p>{current?.relative_path ?? repoPath}</p>
+        <h2>{current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle)}</h2>
+        <p>{current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected)}</p>
       </div>
       <div class="head-actions">
         <span class={`status ${status}`}>{t.status[status]}</span>
@@ -700,9 +814,22 @@
       <div class="error">{error}</div>
     {/if}
 
-    <article class="reader">
-      {@html renderedHtml}
-    </article>
+    {#if snapshot}
+      <article class="reader">
+        {@html renderedHtml}
+      </article>
+    {:else}
+      <section class="repo-empty">
+        <div>
+          <div class="eyebrow">{t.memoryRepo}</div>
+          <h2>{t.noRepoTitle}</h2>
+          <p>{t.noRepoBody}</p>
+        </div>
+        <div class="repo-empty-actions">
+          <button class="repo-open" type="button" on:click={browseRepo}>{t.browse}</button>
+        </div>
+      </section>
+    {/if}
   </section>
 
   {#if contextOpen}

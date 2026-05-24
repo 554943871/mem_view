@@ -6,26 +6,25 @@ memView is a minimal, read-only macOS app for browsing local Markdown memory
 repositories. It is built for memory repos that contain many `.md` files and
 Mermaid diagrams, with a focus on fast local viewing rather than editing.
 
-The current MVP is tuned for:
-
-```text
-/Users/god/project/easy-kid-mem
-```
+memView does not hard-code a memory repository. On first launch, choose a local
+folder to open. The selected folder is saved locally and reopened next time.
 
 ## Download
 
-The first packaged macOS build is available from GitHub Releases:
+The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.1.1](https://github.com/554943871/mem_view/releases/tag/v0.1.1)
+[Download memView v0.1.2](https://github.com/554943871/mem_view/releases/tag/v0.1.2)
 
 Direct dmg asset:
 
-[memView_0.1.1_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.1/memView_0.1.1_x64.dmg)
+[memView_0.1.2_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.2/memView_0.1.2_x64.dmg)
 
 ## Features
 
 - Local-only macOS desktop app, packaged with Tauri.
 - Read-only Markdown browsing. It does not modify the memory repository.
+- Choose a local memory repository folder on first launch.
+- Reopen the last selected memory repository on later launches.
 - Scans the memory repo and shows a file tree.
 - Renders Markdown content with Mermaid diagrams.
 - Shows file metadata and a simple read chain panel.
@@ -86,29 +85,14 @@ Build outputs:
 
 ```text
 src-tauri/target/release/bundle/macos/memView.app
-src-tauri/target/release/bundle/dmg/memView_0.1.1_x64.dmg
+src-tauri/target/release/bundle/dmg/memView_0.1.2_x64.dmg
 ```
 
 ## Repository Path
 
-The MVP currently uses a fixed local memory repo path in two places:
-
-- `src/App.svelte`
-- `src-tauri/src/lib.rs`
-
-To point memView at another memory repo, update:
-
-```ts
-const repoPath = "/Users/god/project/easy-kid-mem";
-```
-
-and:
-
-```rust
-const DEFAULT_REPO: &str = "/Users/god/project/easy-kid-mem";
-```
-
-Future versions should move this into a local preference or folder picker.
+memView opens the repository folder chosen in the app. The path is persisted in
+local app storage, not written into the memory repository. You can change it
+from the repository picker in the sidebar.
 
 ## Project Structure
 
@@ -125,6 +109,6 @@ Future versions should move this into a local preference or folder picker.
 
 - macOS-focused.
 - Read-only by design.
-- The memory repo path is fixed for now.
+- The memory repo path is user-selected and stored locally.
 - The app is optimized for local Markdown and Mermaid memory libraries, not for
   general-purpose note editing.

@@ -4,8 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const DEFAULT_REPO: &str = "/Users/god/project/easy-kid-mem";
-
 #[derive(Debug, Serialize)]
 struct RepoSnapshot {
     root_path: String,
@@ -60,8 +58,8 @@ struct ChainItem {
 }
 
 #[tauri::command]
-fn scan_repo(repo_path: Option<String>) -> Result<RepoSnapshot, String> {
-    let root = normalize_repo_path(repo_path)?;
+fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
+    let root = normalize_repo_path(&repo_path)?;
     let mut docs = scan_markdown_docs(&root)?;
     docs.sort_by(|a, b| sort_key(&a.relative_path).cmp(&sort_key(&b.relative_path)));
 
@@ -80,8 +78,8 @@ fn scan_repo(repo_path: Option<String>) -> Result<RepoSnapshot, String> {
 }
 
 #[tauri::command]
-fn read_document(path: String) -> Result<Document, String> {
-    let root = normalize_repo_path(None)?;
+fn read_document(repo_path: String, path: String) -> Result<Document, String> {
+    let root = normalize_repo_path(&repo_path)?;
     let requested = PathBuf::from(path);
     ensure_readable_child(&root, &requested)?;
 
@@ -89,7 +87,7 @@ fn read_document(path: String) -> Result<Document, String> {
         .map_err(|err| format!("读取文档失败：{} ({})", requested.display(), err))?;
     let relative_path = requested
         .strip_prefix(&root)
-        .map_err(|_| "文档不在默认记忆库内".to_string())?
+        .map_err(|_| "文档不在当前记忆库内".to_string())?
         .to_string_lossy()
         .to_string();
     let title = extract_title(&markdown).unwrap_or_else(|| fallback_title(&requested));
@@ -107,8 +105,12 @@ fn read_document(path: String) -> Result<Document, String> {
     })
 }
 
-fn normalize_repo_path(repo_path: Option<String>) -> Result<PathBuf, String> {
-    let path = PathBuf::from(repo_path.unwrap_or_else(|| DEFAULT_REPO.to_string()));
+fn normalize_repo_path(repo_path: &str) -> Result<PathBuf, String> {
+    if repo_path.trim().is_empty() {
+        return Err("请选择一个记忆库目录".to_string());
+    }
+
+    let path = PathBuf::from(repo_path);
     let canonical = path
         .canonicalize()
         .map_err(|err| format!("记忆库不存在或不可读：{} ({})", path.display(), err))?;
@@ -343,6 +345,7 @@ fn pretty_segment(segment: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![scan_repo, read_document])
         .run(tauri::generate_context!())
@@ -353,9 +356,11 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    const TEST_REPO: &str = "/Users/god/project/easy-kid-mem";
+
     #[test]
     fn scans_easy_kid_memory_repo() {
-        let snapshot = scan_repo(None).expect("default easy-kid mem repo should scan");
+        let snapshot = scan_repo(TEST_REPO.to_string()).expect("easy-kid mem repo should scan");
 
         assert!(snapshot.counts.markdown >= 90);
         assert!(snapshot.counts.mermaid >= 30);
@@ -367,8 +372,11 @@ mod tests {
 
     #[test]
     fn reads_baseline_readme_with_chain() {
-        let root = normalize_repo_path(None).expect("default easy-kid mem repo should exist");
-        let doc = read_document(root.join("baseline/README.md").to_string_lossy().to_string())
+        let root = normalize_repo_path(TEST_REPO).expect("easy-kid mem repo should exist");
+        let doc = read_document(
+            TEST_REPO.to_string(),
+            root.join("baseline/README.md").to_string_lossy().to_string(),
+        )
             .expect("baseline README should read");
 
         assert_eq!(doc.kind, "baseline");

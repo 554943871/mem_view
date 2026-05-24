@@ -1,6 +1,6 @@
 {
   "name": "mem-view",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,12 +11,13 @@
     "check": "vite build && cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.8.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "markdown-it": "^14.1.0",
     "mermaid": "^11.12.1",
-    "vite": "^7.2.4",
-    "svelte": "^5.43.10"
+    "svelte": "^5.43.10",
+    "vite": "^7.2.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.3",

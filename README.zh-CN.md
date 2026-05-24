@@ -6,26 +6,25 @@ memView 是一个极简、只读的 macOS 本地应用，用来浏览本地 Mark
 记忆库。它适合处理包含大量 `.md` 文件和 Mermaid 图的记忆库，目标是快速、
 安静地查看内容，而不是编辑内容。
 
-当前 MVP 默认适配的记忆库路径是：
-
-```text
-/Users/god/project/easy-kid-mem
-```
+memView 不会写死某个记忆库。首次启动时选择一个本地目录即可，选择结果会保存在本地，
+下次启动会自动打开上次选择的记忆库。
 
 ## 下载
 
-第一个 macOS 打包版本已发布在 GitHub Releases：
+最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.1.1](https://github.com/554943871/mem_view/releases/tag/v0.1.1)
+[下载 memView v0.1.2](https://github.com/554943871/mem_view/releases/tag/v0.1.2)
 
 直接下载 dmg：
 
-[memView_0.1.1_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.1/memView_0.1.1_x64.dmg)
+[memView_0.1.2_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.2/memView_0.1.2_x64.dmg)
 
 ## 功能
 
 - 本地 macOS 桌面应用，基于 Tauri 打包。
 - 只读浏览 Markdown，不会修改记忆库文件。
+- 首次启动选择本地记忆库目录。
+- 后续启动自动打开上次选择的记忆库。
 - 扫描记忆库并展示文件树。
 - 渲染 Markdown 内容和 Mermaid 图。
 - 展示文件信息和简单阅读链。
@@ -86,29 +85,13 @@ npm run build
 
 ```text
 src-tauri/target/release/bundle/macos/memView.app
-src-tauri/target/release/bundle/dmg/memView_0.1.1_x64.dmg
+src-tauri/target/release/bundle/dmg/memView_0.1.2_x64.dmg
 ```
 
 ## 记忆库路径
 
-当前 MVP 还没有做文件夹选择器，默认记忆库路径写在两个地方：
-
-- `src/App.svelte`
-- `src-tauri/src/lib.rs`
-
-如果要指向其他记忆库，修改：
-
-```ts
-const repoPath = "/Users/god/project/easy-kid-mem";
-```
-
-以及：
-
-```rust
-const DEFAULT_REPO: &str = "/Users/god/project/easy-kid-mem";
-```
-
-后续版本应该把它改成本地偏好设置或文件夹选择器。
+memView 打开你在应用里选择的记忆库目录。这个路径只保存在本地应用存储里，
+不会写入记忆库。需要切换时，可以在左侧栏的记忆库选择区重新选择。
 
 ## 项目结构
 
@@ -126,5 +109,5 @@ const DEFAULT_REPO: &str = "/Users/god/project/easy-kid-mem";
 
 - 主要面向 macOS。
 - 设计上保持只读。
-- 记忆库路径目前是固定的。
+- 记忆库路径由用户选择，并保存在本地。
 - 它面向本地 Markdown 和 Mermaid 记忆库，不是通用笔记编辑器。
