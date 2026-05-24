@@ -1,0 +1,25 @@
+[package]
+name = "mem-view"
+version = "0.1.0"
+description = "A read-only local viewer for mem repositories"
+authors = ["god"]
+edition = "2021"
+
+[lib]
+name = "mem_view_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "mem-view"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+walkdir = "2"

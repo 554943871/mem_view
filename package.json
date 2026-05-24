@@ -1,0 +1,25 @@
+{
+  "name": "mem-view",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "dev:web": "vite --host 127.0.0.1 --port 1420",
+    "build:web": "vite build",
+    "check": "vite build && cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "markdown-it": "^14.1.0",
+    "mermaid": "^11.12.1",
+    "vite": "^7.2.4",
+    "svelte": "^5.43.10"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.3",
+    "typescript": "^5.9.3"
+  }
+}
