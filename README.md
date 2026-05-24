@@ -13,11 +13,15 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.1.2](https://github.com/554943871/mem_view/releases/tag/v0.1.2)
+[Download memView v0.2.0](https://github.com/554943871/mem_view/releases/tag/v0.2.0)
 
 Direct dmg asset:
 
-[memView_0.1.2_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.2/memView_0.1.2_x64.dmg)
+[memView_0.2.0_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.0/memView_0.2.0_arm64.dmg)
+
+Current public builds are macOS arm64 builds. Apple Developer ID signing and
+notarization are still required before calling the app a fully polished stable
+macOS distribution.
 
 ## Features
 
@@ -75,6 +79,12 @@ Run Rust tests:
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+Run all checks:
+
+```bash
+npm run check
+```
+
 Build the macOS app and dmg:
 
 ```bash
@@ -85,8 +95,12 @@ Build outputs:
 
 ```text
 src-tauri/target/release/bundle/macos/memView.app
-src-tauri/target/release/bundle/dmg/memView_0.1.2_x64.dmg
+src-tauri/target/release/bundle/dmg/memView_0.2.0_x64.dmg
 ```
+
+The generated dmg name may include `x64` when the local Node.js runtime is
+x64. Check the actual app binary with `file`; current releases are uploaded as
+`arm64` assets when the binary is arm64.
 
 ## Repository Path
 
@@ -100,10 +114,17 @@ from the repository picker in the sidebar.
 .
 +-- src/                 # Svelte frontend
 +-- src-tauri/           # Tauri and Rust backend
++-- docs/                # Release checklist and packaging notes
 +-- package.json         # npm scripts and frontend dependencies
 +-- vite.config.ts       # Vite config
 +-- README.md
 ```
+
+## Privacy and License
+
+- Privacy: [PRIVACY.md](PRIVACY.md)
+- License: [MIT](LICENSE)
+- Release checklist: [docs/RELEASE.md](docs/RELEASE.md)
 
 ## MVP Notes
 

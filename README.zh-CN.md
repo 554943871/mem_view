@@ -13,11 +13,14 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.1.2](https://github.com/554943871/mem_view/releases/tag/v0.1.2)
+[下载 memView v0.2.0](https://github.com/554943871/mem_view/releases/tag/v0.2.0)
 
 直接下载 dmg：
 
-[memView_0.1.2_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.2/memView_0.1.2_x64.dmg)
+[memView_0.2.0_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.0/memView_0.2.0_arm64.dmg)
+
+当前公开构建是 macOS arm64 版本。要把它称为完全稳定的 macOS 正式分发版，
+仍然需要 Apple Developer ID 签名和公证。
 
 ## 功能
 
@@ -75,6 +78,12 @@ npm run build:web
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+运行完整检查：
+
+```bash
+npm run check
+```
+
 构建 macOS app 和 dmg：
 
 ```bash
@@ -85,8 +94,12 @@ npm run build
 
 ```text
 src-tauri/target/release/bundle/macos/memView.app
-src-tauri/target/release/bundle/dmg/memView_0.1.2_x64.dmg
+src-tauri/target/release/bundle/dmg/memView_0.2.0_x64.dmg
 ```
+
+如果本机 Node.js 运行时是 x64，Tauri 生成的 dmg 文件名可能仍带 `x64`。
+以 `file` 检查 app 二进制为准；当前 Release 会在二进制为 arm64 时上传为
+`arm64` 资产名。
 
 ## 记忆库路径
 
@@ -99,11 +112,18 @@ memView 打开你在应用里选择的记忆库目录。这个路径只保存在
 .
 +-- src/                 # Svelte 前端
 +-- src-tauri/           # Tauri 和 Rust 后端
++-- docs/                # 发布检查清单和打包说明
 +-- package.json         # npm 脚本和前端依赖
 +-- vite.config.ts       # Vite 配置
 +-- README.md
 +-- README.zh-CN.md
 ```
+
+## 隐私和许可证
+
+- 隐私说明：[PRIVACY.zh-CN.md](PRIVACY.zh-CN.md)
+- License：[MIT](LICENSE)
+- 发布检查清单：[docs/RELEASE.md](docs/RELEASE.md)
 
 ## MVP 说明
 

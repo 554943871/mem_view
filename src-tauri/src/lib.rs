@@ -81,7 +81,7 @@ fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
 fn read_document(repo_path: String, path: String) -> Result<Document, String> {
     let root = normalize_repo_path(&repo_path)?;
     let requested = PathBuf::from(path);
-    ensure_readable_child(&root, &requested)?;
+    let requested = canonical_readable_child(&root, &requested)?;
 
     let markdown = fs::read_to_string(&requested)
         .map_err(|err| format!("读取文档失败：{} ({})", requested.display(), err))?;
@@ -281,14 +281,14 @@ fn push_chain(chain: &mut Vec<ChainItem>, label: &str, path: PathBuf) {
     });
 }
 
-fn ensure_readable_child(root: &Path, requested: &Path) -> Result<(), String> {
+fn canonical_readable_child(root: &Path, requested: &Path) -> Result<PathBuf, String> {
     let canonical = requested
         .canonicalize()
         .map_err(|err| format!("文档不存在或不可读：{} ({})", requested.display(), err))?;
     if !canonical.starts_with(root) {
-        return Err("只能读取默认记忆库内的文件".to_string());
+        return Err("只能读取当前记忆库内的文件".to_string());
     }
-    Ok(())
+    Ok(canonical)
 }
 
 fn extract_title(markdown: &str) -> Option<String> {
@@ -355,15 +355,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const TEST_REPO: &str = "/Users/god/project/easy-kid-mem";
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn scans_easy_kid_memory_repo() {
-        let snapshot = scan_repo(TEST_REPO.to_string()).expect("easy-kid mem repo should scan");
+    fn scans_memory_repo() {
+        let root = build_test_repo();
+        let snapshot = scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
 
-        assert!(snapshot.counts.markdown >= 90);
-        assert!(snapshot.counts.mermaid >= 30);
+        assert_eq!(snapshot.counts.markdown, 4);
+        assert_eq!(snapshot.counts.mermaid, 1);
         assert!(snapshot
             .docs
             .iter()
@@ -372,9 +372,10 @@ mod tests {
 
     #[test]
     fn reads_baseline_readme_with_chain() {
-        let root = normalize_repo_path(TEST_REPO).expect("easy-kid mem repo should exist");
+        let root = build_test_repo();
+        let repo_path = root.to_string_lossy().to_string();
         let doc = read_document(
-            TEST_REPO.to_string(),
+            repo_path,
             root.join("baseline/README.md").to_string_lossy().to_string(),
         )
             .expect("baseline README should read");
@@ -382,5 +383,26 @@ mod tests {
         assert_eq!(doc.kind, "baseline");
         assert!(doc.markdown.contains("# "));
         assert_eq!(doc.read_chain.len(), 1);
+    }
+
+    fn build_test_repo() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("mem-view-test-{}-{}", std::process::id(), nonce));
+
+        fs::create_dir_all(root.join("baseline/10-standards")).expect("test directories should create");
+        fs::create_dir_all(root.join("requirements/R001/tasks/T001")).expect("test directories should create");
+
+        fs::write(root.join("README.md"), "# Test Memory\n").expect("root README should write");
+        fs::write(root.join("baseline/README.md"), "# Baseline\n\n```mermaid\ngraph TD\n  A --> B\n```\n")
+            .expect("baseline README should write");
+        fs::write(root.join("baseline/10-standards/rules.md"), "# Rules\n")
+            .expect("rules doc should write");
+        fs::write(root.join("requirements/R001/tasks/T001/README.md"), "# Task\n")
+            .expect("task README should write");
+
+        root
     }
 }
