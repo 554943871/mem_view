@@ -1,5 +1,7 @@
 # memView
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 memView is a minimal, read-only macOS app for browsing local Markdown memory
 repositories. It is built for memory repos that contain many `.md` files and
 Mermaid diagrams, with a focus on fast local viewing rather than editing.
@@ -14,11 +16,11 @@ The current MVP is tuned for:
 
 The first packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.1.0](https://github.com/554943871/mem_view/releases/tag/v0.1.0)
+[Download memView v0.1.1](https://github.com/554943871/mem_view/releases/tag/v0.1.1)
 
 Direct dmg asset:
 
-[memView_0.1.0_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.0/memView_0.1.0_x64.dmg)
+[memView_0.1.1_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.1/memView_0.1.1_x64.dmg)
 
 ## Features
 
@@ -28,6 +30,7 @@ Direct dmg asset:
 - Renders Markdown content with Mermaid diagrams.
 - Shows file metadata and a simple read chain panel.
 - Search by document title, path, and kind.
+- Bilingual UI with English and Simplified Chinese support.
 - Mermaid detail viewer:
   - top-right enlarge button for each diagram
   - solid white background
@@ -83,7 +86,7 @@ Build outputs:
 
 ```text
 src-tauri/target/release/bundle/macos/memView.app
-src-tauri/target/release/bundle/dmg/memView_0.1.0_x64.dmg
+src-tauri/target/release/bundle/dmg/memView_0.1.1_x64.dmg
 ```
 
 ## Repository Path

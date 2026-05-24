@@ -49,8 +49,160 @@
 
   type FlatNode = TreeNode & { depth: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
+  type Locale = "zh-CN" | "en";
+  type StatusKey = "loading" | "indexing" | "ready" | "opening" | "error";
+  type MessagePack = {
+    docs: string;
+    diagrams: string;
+    refresh: string;
+    searchPlaceholder: string;
+    memoryFiles: string;
+    noMatches: string;
+    language: string;
+    hide: string;
+    info: string;
+    readChain: string;
+    noChain: string;
+    file: string;
+    kind: string;
+    path: string;
+    mermaid: string;
+    yes: string;
+    no: string;
+    diagram: string;
+    diagramDetail: string;
+    diagramViewer: string;
+    mermaidDiagram: string;
+    zoomOut: string;
+    zoomIn: string;
+    fitDiagram: string;
+    fitShort: string;
+    closeDiagram: string;
+    enlargeDiagram: string;
+    status: Record<StatusKey, string>;
+    kinds: Record<string, string>;
+    chainLabels: Record<string, string>;
+    folderTitles: Record<string, string>;
+  };
 
   const repoPath = "/Users/god/project/easy-kid-mem";
+  const localeStorageKey = "memView.locale";
+  const messages: Record<Locale, MessagePack> = {
+    "zh-CN": {
+      docs: "文档",
+      diagrams: "图",
+      refresh: "刷新",
+      searchPlaceholder: "搜索标题或路径",
+      memoryFiles: "记忆文件",
+      noMatches: "没有匹配",
+      language: "语言",
+      hide: "隐藏",
+      info: "信息",
+      readChain: "阅读链",
+      noChain: "这个文件没有阅读链。",
+      file: "文件",
+      kind: "类型",
+      path: "路径",
+      mermaid: "Mermaid",
+      yes: "是",
+      no: "否",
+      diagram: "图",
+      diagramDetail: "图详情",
+      diagramViewer: "图查看器",
+      mermaidDiagram: "Mermaid 图",
+      zoomOut: "缩小",
+      zoomIn: "放大",
+      fitDiagram: "适配图",
+      fitShort: "适配",
+      closeDiagram: "关闭图",
+      enlargeDiagram: "放大图",
+      status: {
+        loading: "加载中",
+        indexing: "索引中",
+        ready: "就绪",
+        opening: "打开中",
+        error: "错误"
+      },
+      kinds: {
+        repo: "仓库",
+        baseline: "基线",
+        requirement: "需求",
+        mission: "任务组",
+        task: "任务",
+        document: "文档",
+        folder: "目录"
+      },
+      chainLabels: {
+        baseline: "基线",
+        requirement: "需求",
+        missions: "任务组",
+        tasks: "任务"
+      },
+      folderTitles: {
+        Baseline: "基线",
+        Requirements: "需求",
+        Missions: "任务组",
+        Tasks: "任务"
+      }
+    },
+    en: {
+      docs: "docs",
+      diagrams: "diagrams",
+      refresh: "Refresh",
+      searchPlaceholder: "Search title or path",
+      memoryFiles: "Memory files",
+      noMatches: "No matches",
+      language: "Language",
+      hide: "Hide",
+      info: "Info",
+      readChain: "Read Chain",
+      noChain: "No chain for this file.",
+      file: "File",
+      kind: "Kind",
+      path: "Path",
+      mermaid: "Mermaid",
+      yes: "Yes",
+      no: "No",
+      diagram: "Diagram",
+      diagramDetail: "Diagram detail",
+      diagramViewer: "Diagram viewer",
+      mermaidDiagram: "Mermaid diagram",
+      zoomOut: "Zoom out",
+      zoomIn: "Zoom in",
+      fitDiagram: "Fit diagram",
+      fitShort: "Fit",
+      closeDiagram: "Close diagram",
+      enlargeDiagram: "Enlarge diagram",
+      status: {
+        loading: "Loading",
+        indexing: "Indexing",
+        ready: "Ready",
+        opening: "Opening",
+        error: "Error"
+      },
+      kinds: {
+        repo: "repo",
+        baseline: "baseline",
+        requirement: "requirement",
+        mission: "mission",
+        task: "task",
+        document: "document",
+        folder: "folder"
+      },
+      chainLabels: {
+        baseline: "baseline",
+        requirement: "requirement",
+        missions: "missions",
+        tasks: "tasks"
+      },
+      folderTitles: {
+        Baseline: "Baseline",
+        Requirements: "Requirements",
+        Missions: "Missions",
+        Tasks: "Tasks"
+      }
+    }
+  };
   const markdown = new MarkdownIt({
     html: false,
     linkify: true,
@@ -67,7 +219,7 @@
   let current: Document | null = null;
   let renderedHtml = "";
   let query = "";
-  let status = "Loading";
+  let status: StatusKey = "loading";
   let error = "";
   let contextOpen = true;
   let zoomedDiagramHtml = "";
@@ -81,13 +233,16 @@
   let panStartY = 0;
   let panOriginX = 0;
   let panOriginY = 0;
+  let locale: Locale = getInitialLocale();
 
+  $: t = messages[locale];
   $: flatTree = snapshot ? flattenTree(snapshot.tree) : [];
   $: visibleNodes = query.trim() ? flattenDocs(searchDocs(snapshot?.docs ?? [], query)) : flatTree;
 
   loadRepo();
 
   onMount(() => {
+    document.documentElement.lang = locale;
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
   });
@@ -97,12 +252,60 @@
     window.removeEventListener("resize", handleWindowResize);
   });
 
+  function getInitialLocale(): Locale {
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem(localeStorageKey);
+      if (saved === "zh-CN" || saved === "en") {
+        return saved;
+      }
+    }
+
+    const browserLanguage = typeof navigator === "undefined" ? "" : navigator.language.toLowerCase();
+    return browserLanguage.startsWith("zh") ? "zh-CN" : "en";
+  }
+
+  function setLocale(nextLocale: Locale) {
+    locale = nextLocale;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(localeStorageKey, nextLocale);
+    }
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = nextLocale;
+    }
+    void rerenderCurrentDocument();
+  }
+
+  async function rerenderCurrentDocument() {
+    if (!current) {
+      return;
+    }
+
+    renderedHtml = renderMarkdown(current.markdown);
+    await tick();
+    await renderMermaid();
+  }
+
+  function formatKind(kind: string | null | undefined) {
+    if (!kind) {
+      return "-";
+    }
+    return t.kinds[kind] ?? kind;
+  }
+
+  function formatChainLabel(label: string) {
+    return t.chainLabels[label] ?? label;
+  }
+
+  function displayNodeTitle(node: TreeNode) {
+    return node.path ? node.title : t.folderTitles[node.title] ?? node.title;
+  }
+
   async function loadRepo() {
-    status = "Indexing";
+    status = "indexing";
     error = "";
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath });
-      status = "Ready";
+      status = "ready";
       const entry =
         snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
         snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md") ??
@@ -112,22 +315,22 @@
       }
     } catch (err) {
       error = String(err);
-      status = "Error";
+      status = "error";
     }
   }
 
   async function openDocument(path: string) {
-    status = "Opening";
+    status = "opening";
     error = "";
     try {
       current = await invoke<Document>("read_document", { path });
       renderedHtml = renderMarkdown(current.markdown);
-      status = "Ready";
+      status = "ready";
       await tick();
       await renderMermaid();
     } catch (err) {
       error = String(err);
-      status = "Error";
+      status = "error";
     }
   }
 
@@ -136,7 +339,7 @@
       /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
       (_, encoded: string) => `
         <figure class="diagram-frame">
-          <button class="diagram-zoom" type="button" aria-label="Enlarge diagram" title="Enlarge diagram"></button>
+          <button class="diagram-zoom" type="button" aria-label="${t.enlargeDiagram}" title="${t.enlargeDiagram}"></button>
           <div class="mermaid">${decodeHtml(encoded)}</div>
         </figure>
       `
@@ -211,7 +414,7 @@
     }
 
     zoomedDiagramHtml = serializeDiagramSvg(svg);
-    zoomedDiagramTitle = current?.title ?? "Mermaid diagram";
+    zoomedDiagramTitle = current?.title ?? t.mermaidDiagram;
     resetDiagramView();
     await tick();
     fitDiagramToViewport();
@@ -430,14 +633,14 @@
     <div class="brand">
       <div>
         <h1>memView</h1>
-        <p>{snapshot?.counts.markdown ?? 0} docs · {snapshot?.counts.mermaid ?? 0} diagrams</p>
+        <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
       </div>
-      <button class="ghost" type="button" on:click={loadRepo}>Refresh</button>
+      <button class="ghost" type="button" on:click={loadRepo}>{t.refresh}</button>
     </div>
 
-    <input class="search" bind:value={query} placeholder="Search title or path" />
+    <input class="search" bind:value={query} placeholder={t.searchPlaceholder} />
 
-    <nav class="tree" aria-label="Memory files">
+    <nav class="tree" aria-label={t.memoryFiles}>
       {#if visibleNodes.length}
         {#each visibleNodes as node (node.id)}
           <button
@@ -446,16 +649,16 @@
             disabled={!node.path}
             type="button"
             on:click={() => node.path && openDocument(node.path)}
-            title={node.path ?? node.title}
+            title={node.path ?? displayNodeTitle(node)}
           >
-            <span class="node-title">{node.title}</span>
+            <span class="node-title">{displayNodeTitle(node)}</span>
             {#if node.path}
-              <span class="node-meta">{node.kind}{node.title.endsWith(".md") ? "" : ""}</span>
+              <span class="node-meta">{formatKind(node.kind)}{node.title.endsWith(".md") ? "" : ""}</span>
             {/if}
           </button>
         {/each}
       {:else}
-        <div class="empty">No matches</div>
+        <div class="empty">{t.noMatches}</div>
       {/if}
     </nav>
   </aside>
@@ -463,14 +666,32 @@
   <section class="content">
     <header class="reader-head">
       <div>
-        <div class="eyebrow">{current?.kind ?? "repo"}</div>
-        <h2>{current?.title ?? "Loading"}</h2>
+        <div class="eyebrow">{formatKind(current?.kind ?? "repo")}</div>
+        <h2>{current?.title ?? t.status.loading}</h2>
         <p>{current?.relative_path ?? repoPath}</p>
       </div>
       <div class="head-actions">
-        <span class={`status ${status.toLowerCase()}`}>{status}</span>
+        <span class={`status ${status}`}>{t.status[status]}</span>
+        <div class="language-toggle" role="group" aria-label={t.language}>
+          <button
+            class:active={locale === "zh-CN"}
+            type="button"
+            aria-pressed={locale === "zh-CN"}
+            on:click={() => setLocale("zh-CN")}
+          >
+            中文
+          </button>
+          <button
+            class:active={locale === "en"}
+            type="button"
+            aria-pressed={locale === "en"}
+            on:click={() => setLocale("en")}
+          >
+            EN
+          </button>
+        </div>
         <button class="ghost iconish" type="button" on:click={() => (contextOpen = !contextOpen)}>
-          {contextOpen ? "Hide" : "Info"}
+          {contextOpen ? t.hide : t.info}
         </button>
       </div>
     </header>
@@ -487,53 +708,53 @@
   {#if contextOpen}
     <aside class="context">
       <section>
-        <h3>Read Chain</h3>
+        <h3>{t.readChain}</h3>
         {#if current?.read_chain.length}
           <div class="chain">
             {#each current.read_chain as item}
               <button type="button" on:click={() => openDocument(item.path)}>
-                <span>{item.label}</span>
+                <span>{formatChainLabel(item.label)}</span>
                 <strong>{item.title}</strong>
               </button>
             {/each}
           </div>
         {:else}
-          <p class="muted">No chain for this file.</p>
+          <p class="muted">{t.noChain}</p>
         {/if}
       </section>
 
       <section>
-        <h3>File</h3>
+        <h3>{t.file}</h3>
         <dl>
-          <dt>Kind</dt>
-          <dd>{current?.kind ?? "-"}</dd>
-          <dt>Path</dt>
+          <dt>{t.kind}</dt>
+          <dd>{formatKind(current?.kind)}</dd>
+          <dt>{t.path}</dt>
           <dd>{current?.relative_path ?? "-"}</dd>
-          <dt>Mermaid</dt>
-          <dd>{current?.has_mermaid ? "Yes" : "No"}</dd>
+          <dt>{t.mermaid}</dt>
+          <dd>{current?.has_mermaid ? t.yes : t.no}</dd>
         </dl>
       </section>
     </aside>
   {/if}
 
   {#if zoomedDiagramHtml}
-    <div class="diagram-modal" role="dialog" aria-modal="true" aria-label="Diagram detail">
+    <div class="diagram-modal" role="dialog" aria-modal="true" aria-label={t.diagramDetail}>
       <div class="diagram-modal-head">
         <div>
-          <div class="eyebrow">Diagram</div>
+          <div class="eyebrow">{t.diagram}</div>
           <h2>{zoomedDiagramTitle}</h2>
         </div>
         <div class="diagram-tools">
-          <button type="button" on:click={() => adjustZoom(-0.2)} aria-label="Zoom out" title="Zoom out">
+          <button type="button" on:click={() => adjustZoom(-0.2)} aria-label={t.zoomOut} title={t.zoomOut}>
             -
           </button>
-          <button type="button" on:click={resetDiagramView} aria-label="Fit diagram" title={`Fit diagram (${Math.round(zoomLevel * 100)}%)`}>
-            Fit
+          <button type="button" on:click={resetDiagramView} aria-label={t.fitDiagram} title={`${t.fitDiagram} (${Math.round(zoomLevel * 100)}%)`}>
+            {t.fitShort}
           </button>
-          <button type="button" on:click={() => adjustZoom(0.2)} aria-label="Zoom in" title="Zoom in">
+          <button type="button" on:click={() => adjustZoom(0.2)} aria-label={t.zoomIn} title={t.zoomIn}>
             +
           </button>
-          <button type="button" on:click={closeDiagram} aria-label="Close diagram" title="Close diagram">
+          <button type="button" on:click={closeDiagram} aria-label={t.closeDiagram} title={t.closeDiagram}>
             x
           </button>
         </div>
@@ -542,7 +763,7 @@
         class:panning={isPanning}
         class="diagram-modal-body"
         role="application"
-        aria-label="Diagram viewer"
+        aria-label={t.diagramViewer}
         bind:this={diagramViewport}
         on:wheel={handleDiagramWheel}
         on:pointerdown={startPan}

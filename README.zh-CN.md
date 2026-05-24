@@ -1,0 +1,130 @@
+# memView
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+memView 是一个极简、只读的 macOS 本地应用，用来浏览本地 Markdown
+记忆库。它适合处理包含大量 `.md` 文件和 Mermaid 图的记忆库，目标是快速、
+安静地查看内容，而不是编辑内容。
+
+当前 MVP 默认适配的记忆库路径是：
+
+```text
+/Users/god/project/easy-kid-mem
+```
+
+## 下载
+
+第一个 macOS 打包版本已发布在 GitHub Releases：
+
+[下载 memView v0.1.1](https://github.com/554943871/mem_view/releases/tag/v0.1.1)
+
+直接下载 dmg：
+
+[memView_0.1.1_x64.dmg](https://github.com/554943871/mem_view/releases/download/v0.1.1/memView_0.1.1_x64.dmg)
+
+## 功能
+
+- 本地 macOS 桌面应用，基于 Tauri 打包。
+- 只读浏览 Markdown，不会修改记忆库文件。
+- 扫描记忆库并展示文件树。
+- 渲染 Markdown 内容和 Mermaid 图。
+- 展示文件信息和简单阅读链。
+- 支持按标题、路径、类型搜索。
+- 支持中英双语 UI，可在中文和 English 之间切换。
+- Mermaid 大图查看器：
+  - 每个图右上角提供放大按钮
+  - 纯白不透明背景
+  - 打开后默认裁掉 Mermaid 内部空白并适配可视区域
+  - 鼠标滚轮按指针位置缩放
+  - 鼠标拖拽移动视图
+  - 提供适配、放大、缩小、关闭控制
+
+## 技术栈
+
+| 部分 | 技术 | 提供的能力 |
+| --- | --- | --- |
+| 桌面壳 | Tauri 2 | 原生 macOS 应用打包和 Rust 命令桥接 |
+| 后端 | Rust | 本地文件扫描、Markdown 读取、路径安全检查 |
+| 前端 | Svelte + TypeScript | 极简阅读界面和交互状态 |
+| 构建 | Vite | 前端开发服务和生产构建 |
+| Markdown | markdown-it | Markdown 转 HTML |
+| 图表 | Mermaid | Mermaid 图渲染 |
+
+## 开发
+
+安装依赖：
+
+```bash
+npm install
+```
+
+启动开发模式：
+
+```bash
+npm run dev
+```
+
+只构建前端：
+
+```bash
+npm run build:web
+```
+
+运行 Rust 测试：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+构建 macOS app 和 dmg：
+
+```bash
+npm run build
+```
+
+构建产物：
+
+```text
+src-tauri/target/release/bundle/macos/memView.app
+src-tauri/target/release/bundle/dmg/memView_0.1.1_x64.dmg
+```
+
+## 记忆库路径
+
+当前 MVP 还没有做文件夹选择器，默认记忆库路径写在两个地方：
+
+- `src/App.svelte`
+- `src-tauri/src/lib.rs`
+
+如果要指向其他记忆库，修改：
+
+```ts
+const repoPath = "/Users/god/project/easy-kid-mem";
+```
+
+以及：
+
+```rust
+const DEFAULT_REPO: &str = "/Users/god/project/easy-kid-mem";
+```
+
+后续版本应该把它改成本地偏好设置或文件夹选择器。
+
+## 项目结构
+
+```text
+.
++-- src/                 # Svelte 前端
++-- src-tauri/           # Tauri 和 Rust 后端
++-- package.json         # npm 脚本和前端依赖
++-- vite.config.ts       # Vite 配置
++-- README.md
++-- README.zh-CN.md
+```
+
+## MVP 说明
+
+- 主要面向 macOS。
+- 设计上保持只读。
+- 记忆库路径目前是固定的。
+- 它面向本地 Markdown 和 Mermaid 记忆库，不是通用笔记编辑器。
