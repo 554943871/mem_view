@@ -13,11 +13,11 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.2.0](https://github.com/554943871/mem_view/releases/tag/v0.2.0)
+[Download memView v0.2.1](https://github.com/554943871/mem_view/releases/tag/v0.2.1)
 
 Direct dmg asset:
 
-[memView_0.2.0_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.0/memView_0.2.0_arm64.dmg)
+[memView_0.2.1_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.1/memView_0.2.1_arm64.dmg)
 
 Current public builds are macOS arm64 builds. Apple Developer ID signing and
 notarization are still required before calling the app a fully polished stable

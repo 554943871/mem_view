@@ -13,11 +13,11 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.2.0](https://github.com/554943871/mem_view/releases/tag/v0.2.0)
+[下载 memView v0.2.1](https://github.com/554943871/mem_view/releases/tag/v0.2.1)
 
 直接下载 dmg：
 
-[memView_0.2.0_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.0/memView_0.2.0_arm64.dmg)
+[memView_0.2.1_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.1/memView_0.2.1_arm64.dmg)
 
 当前公开构建是 macOS arm64 版本。要把它称为完全稳定的 macOS 正式分发版，
 仍然需要 Apple Developer ID 签名和公证。

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.1
+
+- Replaced the default placeholder app icon with a polished memView icon.
+- Added release-side macOS signature verification notes from the v0.2.0 repack.
+
 ## v0.2.0
 
 - Added selectable memory repository support.
