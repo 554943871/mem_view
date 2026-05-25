@@ -22,6 +22,14 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 当前公开构建是 macOS arm64 版本。要把它称为完全稳定的 macOS 正式分发版，
 仍然需要 Apple Developer ID 签名和公证。
 
+当前构建是 ad-hoc 签名，但还没有公证。如果下载后 macOS 拦截应用，先核对
+Release notes 里的 SHA-256，再到“隐私与安全性”里选择“仍要打开”，或对已安装
+应用移除 quarantine：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/memView.app
+```
+
 ## 功能
 
 - 本地 macOS 桌面应用，基于 Tauri 打包。
@@ -88,6 +96,12 @@ npm run check
 
 ```bash
 npm run build
+```
+
+上传前校验 macOS Release 签名：
+
+```bash
+npm run verify:mac-release -- src-tauri/target/release/bundle/macos/memView.app
 ```
 
 构建产物：

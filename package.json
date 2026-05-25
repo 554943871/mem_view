@@ -8,7 +8,8 @@
     "build": "tauri build",
     "dev:web": "vite --host 127.0.0.1 --port 1420",
     "build:web": "vite build",
-    "check": "vite build && cargo test --manifest-path src-tauri/Cargo.toml"
+    "check": "vite build && cargo test --manifest-path src-tauri/Cargo.toml",
+    "verify:mac-release": "scripts/verify-macos-release.sh"
   },
   "dependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

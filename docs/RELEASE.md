@@ -16,17 +16,40 @@ Use this checklist before publishing a public macOS build.
 file src-tauri/target/release/bundle/macos/memView.app/Contents/MacOS/mem-view
 ```
 
+- Verify that the app bundle signature is structurally valid before uploading:
+
+```bash
+npm run verify:mac-release -- src-tauri/target/release/bundle/macos/memView.app
+npm run verify:mac-release -- src-tauri/target/release/bundle/dmg/memView_<version>_arm64.dmg
+```
+
+Do not publish a dmg if verification reports a `Codesign Error`. macOS may show
+that broken bundle as damaged even when the dmg checksum is valid.
+
 ## macOS Signing and Notarization
 
 For a public stable release, sign and notarize with an Apple Developer ID.
 
 This machine currently has no valid code signing identities, so local builds are
-ad-hoc signed unless a Developer ID certificate is installed.
+ad-hoc signed unless a Developer ID certificate is installed. The Tauri config
+sets `bundle.macOS.signingIdentity` to `-` so local macOS bundles receive a
+complete ad-hoc signature instead of relying on the linker signature of the
+main executable only.
 
 Check identities:
 
 ```bash
 security find-identity -v -p codesigning
+```
+
+Ad-hoc signing only fixes bundle signature integrity. It does not notarize the
+app. For a browser-downloaded public dmg that opens without Gatekeeper override,
+use a Developer ID Application certificate and notarization. Replace
+`bundle.macOS.signingIdentity` or override it with the Developer ID identity for
+that build, configure Apple's notarization credentials, then run:
+
+```bash
+npm run verify:mac-release -- --gatekeeper src-tauri/target/release/bundle/dmg/memView_<version>_arm64.dmg
 ```
 
 ## Release Assets

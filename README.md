@@ -23,6 +23,14 @@ Current public builds are macOS arm64 builds. Apple Developer ID signing and
 notarization are still required before calling the app a fully polished stable
 macOS distribution.
 
+Current builds are ad-hoc signed, not notarized. If macOS blocks the app after
+download, verify the SHA-256 checksum from the release notes and then use
+Privacy & Security > Open Anyway, or remove quarantine from the installed app:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/memView.app
+```
+
 ## Features
 
 - Local-only macOS desktop app, packaged with Tauri.
@@ -89,6 +97,12 @@ Build the macOS app and dmg:
 
 ```bash
 npm run build
+```
+
+Verify the macOS release signature before uploading:
+
+```bash
+npm run verify:mac-release -- src-tauri/target/release/bundle/macos/memView.app
 ```
 
 Build outputs:
