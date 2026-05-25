@@ -49,6 +49,7 @@
   };
 
   type FlatNode = TreeNode & { depth: number };
+  type DocHeading = { id: string; title: string; level: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
   type MarkdownRenderEnv = { headingCounts: Map<string, number> };
   type LinkTarget = { path: string; anchor: string };
@@ -73,8 +74,13 @@
     language: string;
     hide: string;
     info: string;
+    outline: string;
     readChain: string;
     noChain: string;
+    showSidebar: string;
+    hideSidebar: string;
+    showDetails: string;
+    hideDetails: string;
     file: string;
     kind: string;
     path: string;
@@ -121,8 +127,13 @@
       language: "语言",
       hide: "隐藏",
       info: "信息",
+      outline: "文档目录",
       readChain: "阅读链",
       noChain: "这个文件没有阅读链。",
+      showSidebar: "展开左侧栏",
+      hideSidebar: "收起左侧栏",
+      showDetails: "展开信息栏",
+      hideDetails: "收起信息栏",
       file: "文件",
       kind: "类型",
       path: "路径",
@@ -188,8 +199,13 @@
       language: "Language",
       hide: "Hide",
       info: "Info",
+      outline: "Outline",
       readChain: "Read Chain",
       noChain: "No chain for this file.",
+      showSidebar: "Show sidebar",
+      hideSidebar: "Hide sidebar",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       file: "File",
       kind: "Kind",
       path: "Path",
@@ -243,6 +259,8 @@
     typographer: true
   });
   const defaultHeadingOpenRenderer = markdown.renderer.rules.heading_open;
+  const defaultTableOpenRenderer = markdown.renderer.rules.table_open;
+  const defaultTableCloseRenderer = markdown.renderer.rules.table_close;
 
   markdown.renderer.rules.heading_open = (tokens, index, options, env, self) => {
     const token = tokens[index];
@@ -256,6 +274,20 @@
     return defaultHeadingOpenRenderer
       ? defaultHeadingOpenRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.table_open = (tokens, index, options, env, self) => {
+    const tableOpen = defaultTableOpenRenderer
+      ? defaultTableOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+    return `<div class="table-scroll">${tableOpen}`;
+  };
+
+  markdown.renderer.rules.table_close = (tokens, index, options, env, self) => {
+    const tableClose = defaultTableCloseRenderer
+      ? defaultTableCloseRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+    return `${tableClose}</div>`;
   };
 
   mermaid.initialize({
@@ -274,6 +306,7 @@
   let collapsedFolderIds = new Set<string>();
   let recentRepoPaths = getInitialRecentRepoPaths(repoPath);
   let selectedRecentRepoPath = recentRepoPaths[0] ?? repoPath;
+  let sidebarOpen = false;
   let contextOpen = true;
   let zoomedDiagramHtml = "";
   let zoomedDiagramTitle = "";
@@ -296,6 +329,7 @@
       ? flattenDocs(searchDocs(snapshot.docs, query))
       : flatTree
     : [];
+  $: docHeadings = current ? getDocumentHeadings(current.markdown) : [];
 
   onMount(() => {
     document.documentElement.lang = locale;
@@ -395,6 +429,7 @@
 
     renderedHtml = renderMarkdown(current.markdown);
     await tick();
+    enhanceRenderedTables();
     await renderMermaid();
   }
 
@@ -459,7 +494,7 @@
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
       repoPath = snapshot.root_path;
-      collapsedFolderIds = new Set();
+      collapsedFolderIds = getDefaultCollapsedFolderIds(snapshot.tree);
       rememberRepoPath(snapshot.root_path);
       status = "ready";
       const entry =
@@ -491,6 +526,7 @@
       renderedHtml = renderMarkdown(current.markdown);
       status = "ready";
       await tick();
+      enhanceRenderedTables();
       await renderMermaid();
     } catch (err) {
       error = String(err);
@@ -507,6 +543,76 @@
           <div class="mermaid">${decodeHtml(encoded)}</div>
         </figure>
       `
+    );
+  }
+
+  function getDocumentHeadings(source: string): DocHeading[] {
+    const env: MarkdownRenderEnv = { headingCounts: new Map<string, number>() };
+    const tokens = markdown.parse(source, {});
+    const headings: DocHeading[] = [];
+
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token.type !== "heading_open") {
+        continue;
+      }
+
+      const inlineToken = tokens[index + 1];
+      if (inlineToken?.type !== "inline") {
+        continue;
+      }
+
+      const title = inlineToken.content.trim();
+      const level = Number(token.tag.slice(1));
+      if (!title || !Number.isFinite(level)) {
+        continue;
+      }
+
+      headings.push({
+        id: getUniqueHeadingId(title, env),
+        title,
+        level
+      });
+    }
+
+    return headings;
+  }
+
+  function headingIndent(level: number) {
+    return `${Math.max(0, level - 1) * 10}px`;
+  }
+
+  function enhanceRenderedTables() {
+    const tables = document.querySelectorAll<HTMLTableElement>(".reader table");
+    tables.forEach((table) => {
+      const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead th"));
+      const inlineColumns = headers
+        .map((header, index) => shouldKeepTableColumnInline(header.textContent ?? "") ? index : -1)
+        .filter((index) => index >= 0);
+      const wideColumns = headers
+        .map((header, index) => shouldUseWideTableColumn(header.textContent ?? "") ? index : -1)
+        .filter((index) => index >= 0);
+
+      Array.from(table.rows).forEach((row) => {
+        inlineColumns.forEach((index) => row.cells[index]?.classList.add("table-cell-nowrap"));
+        wideColumns.forEach((index) => row.cells[index]?.classList.add("table-cell-wide"));
+      });
+    });
+  }
+
+  function shouldKeepTableColumnInline(header: string) {
+    return /(^|[_\s-])(id|key|code|path|file|class|method|api|url|uri)($|[_\s-])|编号|序号|顺序|状态|类型|路径|位置|消费|来源|目标|接口|方法|规则|回调|rule|order|status|type|path|file|class|method|api/i.test(
+      header.trim()
+    );
+  }
+
+  function shouldUseWideTableColumn(header: string) {
+    if (shouldKeepTableColumnInline(header)) {
+      return false;
+    }
+
+    return /条件|结果|行为|说明|描述|备注|内容|原因|风险|决策|condition|result|behavior|description|detail|note/i.test(
+      header.trim()
     );
   }
 
@@ -553,6 +659,19 @@
       { ...node, depth },
       ...(collapsed.has(node.id) ? [] : flattenTree(node.children, depth + 1, collapsed))
     ]);
+  }
+
+  function getDefaultCollapsedFolderIds(nodes: TreeNode[]) {
+    const collapsed = new Set<string>();
+    const visit = (node: TreeNode) => {
+      if (!node.path && node.children.length) {
+        collapsed.add(node.id);
+      }
+      node.children.forEach(visit);
+    };
+
+    nodes.forEach(visit);
+    return collapsed;
   }
 
   function searchDocs(docs: DocMeta[], value: string): TreeNode[] {
@@ -984,8 +1103,39 @@
 
   function handleDiagramWheel(event: WheelEvent) {
     event.preventDefault();
-    const factor = event.deltaY < 0 ? 1.12 : 0.88;
+    if (shouldPanDiagramWheel(event)) {
+      panDiagramByWheel(event);
+      return;
+    }
+
+    const factor = getDiagramWheelZoomFactor(event);
     setZoom(zoomLevel * factor, event.clientX, event.clientY);
+  }
+
+  function getDiagramWheelZoomFactor(event: WheelEvent) {
+    if ((event.ctrlKey || event.metaKey) && event.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
+      const rawFactor = Math.exp(-event.deltaY * 0.008);
+      return Math.min(1.15, Math.max(0.85, rawFactor));
+    }
+
+    return event.deltaY < 0 ? 1.12 : 0.88;
+  }
+
+  function shouldPanDiagramWheel(event: WheelEvent) {
+    if (event.ctrlKey || event.metaKey) {
+      return false;
+    }
+
+    if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+      return false;
+    }
+
+    return Math.abs(event.deltaX) > 0 || Math.abs(event.deltaY) < 80;
+  }
+
+  function panDiagramByWheel(event: WheelEvent) {
+    panX -= event.deltaX;
+    panY -= event.deltaY;
   }
 
   function startPan(event: PointerEvent) {
@@ -1023,28 +1173,35 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
-<main class="app-shell">
+<main
+  class="app-shell"
+  class:sidebar-closed={!sidebarOpen}
+  class:context-closed={!contextOpen}
+>
+  {#if sidebarOpen}
   <aside class="sidebar">
     <div class="brand">
       <div>
         <h1>memView</h1>
         <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
       </div>
-      <button
-        class="ghost icon-button"
-        type="button"
-        disabled={!repoPath || repoBusy}
-        aria-label={t.refresh}
-        title={t.refresh}
-        on:click={() => loadRepo(repoPath)}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20 6v5h-5" />
-          <path d="M4 18v-5h5" />
-          <path d="M18.4 9A7 7 0 0 0 6.2 7.2L4 9.3" />
-          <path d="M5.6 15A7 7 0 0 0 17.8 16.8L20 14.7" />
-        </svg>
-      </button>
+      <div class="brand-actions">
+        <button
+          class="ghost icon-button"
+          type="button"
+          aria-expanded={sidebarOpen}
+          aria-label={t.hideSidebar}
+          title={t.hideSidebar}
+          on:click={() => (sidebarOpen = false)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16" />
+            <path d="M14 12h-4" />
+            <path d="m13 9-3 3 3 3" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <section class="repo-picker">
@@ -1092,7 +1249,24 @@
       </button>
     </section>
 
-    <input class="search" bind:value={query} placeholder={t.searchPlaceholder} disabled={!snapshot} />
+    <div class="search-row">
+      <input class="search" bind:value={query} placeholder={t.searchPlaceholder} disabled={!snapshot} />
+      <button
+        class="ghost icon-button search-refresh"
+        type="button"
+        disabled={!repoPath || repoBusy}
+        aria-label={t.refresh}
+        title={t.refresh}
+        on:click={() => loadRepo(repoPath)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 6v5h-5" />
+          <path d="M4 18v-5h5" />
+          <path d="M18.4 9A7 7 0 0 0 6.2 7.2L4 9.3" />
+          <path d="M5.6 15A7 7 0 0 0 17.8 16.8L20 14.7" />
+        </svg>
+      </button>
+    </div>
 
     <nav class="tree" aria-label={t.memoryFiles}>
       {#if visibleNodes.length}
@@ -1108,6 +1282,8 @@
           >
             {#if !node.path}
               <span class="folder-chevron" aria-hidden="true"></span>
+            {:else}
+              <span class="folder-chevron placeholder" aria-hidden="true"></span>
             {/if}
             <span class="node-title">{displayNodeTitle(node)}</span>
             {#if node.path}
@@ -1120,13 +1296,33 @@
       {/if}
     </nav>
   </aside>
+  {/if}
 
   <section class="content">
     <header class="reader-head">
-      <div>
-        <div class="eyebrow">{formatKind(current?.kind ?? "repo")}</div>
-        <h2>{current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle)}</h2>
-        <p>{current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected)}</p>
+      <div class="reader-head-main">
+        {#if !sidebarOpen}
+          <button
+            class="ghost icon-button"
+            type="button"
+            aria-expanded={sidebarOpen}
+            aria-label={t.showSidebar}
+            title={t.showSidebar}
+            on:click={() => (sidebarOpen = true)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+              <path d="M10 12h4" />
+              <path d="m11 9 3 3-3 3" />
+            </svg>
+          </button>
+        {/if}
+        <div class="reader-title">
+          <div class="eyebrow">{formatKind(current?.kind ?? "repo")}</div>
+          <h2>{current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle)}</h2>
+          <p>{current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected)}</p>
+        </div>
       </div>
       <div class="head-actions">
         <span class={`status ${status}`}>{t.status[status]}</span>
@@ -1148,8 +1344,25 @@
             EN
           </button>
         </div>
-        <button class="ghost iconish" type="button" on:click={() => (contextOpen = !contextOpen)}>
-          {contextOpen ? t.hide : t.info}
+        <button
+          class="ghost icon-button"
+          type="button"
+          aria-expanded={contextOpen}
+          aria-label={contextOpen ? t.hideDetails : t.showDetails}
+          title={contextOpen ? t.hideDetails : t.showDetails}
+          on:click={() => (contextOpen = !contextOpen)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M15 4v16" />
+            {#if contextOpen}
+              <path d="M10 12h4" />
+              <path d="m13 9-3 3 3 3" />
+            {:else}
+              <path d="M14 12h-4" />
+              <path d="m11 9 3 3-3 3" />
+            {/if}
+          </svg>
         </button>
       </div>
     </header>
@@ -1180,6 +1393,26 @@
 
   {#if contextOpen}
     <aside class="context">
+      {#if docHeadings.length}
+        <section>
+          <h3>{t.outline}</h3>
+          <nav class="outline" aria-label={t.outline}>
+            {#each docHeadings as heading (heading.id)}
+              <button
+                class="outline-row"
+                class:top-level={heading.level <= 2}
+                type="button"
+                style={`--indent: ${headingIndent(heading.level)}`}
+                title={heading.title}
+                on:click={() => scrollToReaderAnchor(heading.id)}
+              >
+                <span>{heading.title}</span>
+              </button>
+            {/each}
+          </nav>
+        </section>
+      {/if}
+
       <section>
         <h3>{t.readChain}</h3>
         {#if current?.read_chain.length}

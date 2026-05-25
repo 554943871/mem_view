@@ -264,11 +264,11 @@ fn tree_docs(docs: &[DocMeta]) -> Vec<DocMeta> {
 }
 
 fn tree_doc_title(doc: &DocMeta) -> String {
-    if doc.relative_path.ends_with("/README.md") {
-        "README.md".to_string()
-    } else {
-        doc.title.clone()
-    }
+    Path::new(&doc.relative_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&doc.relative_path)
+        .to_string()
 }
 
 fn build_read_chain(root: &Path, relative_path: &str) -> Vec<ChainItem> {
@@ -406,6 +406,11 @@ mod tests {
         assert_eq!(
             find_tree_node(&snapshot.tree, "baseline/README.md").map(|node| node.title.as_str()),
             Some("README.md")
+        );
+        assert_eq!(
+            find_tree_node(&snapshot.tree, "baseline/10-standards/rules.md")
+                .map(|node| node.title.as_str()),
+            Some("rules.md")
         );
     }
 
