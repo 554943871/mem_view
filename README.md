@@ -19,16 +19,26 @@ Direct dmg asset:
 
 [memView_0.2.1_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.1/memView_0.2.1_arm64.dmg)
 
-Current public builds are macOS arm64 builds. Apple Developer ID signing and
-notarization are still required before calling the app a fully polished stable
-macOS distribution.
+## Important: macOS Gatekeeper Notice
 
-Current builds are ad-hoc signed, not notarized. If macOS blocks the app after
-download, verify the SHA-256 checksum from the release notes and then use
-Privacy & Security > Open Anyway, or remove quarantine from the installed app:
+Current public builds are macOS arm64 builds with ad-hoc signing, but they are
+not notarized yet. Apple Developer ID signing and notarization are still
+required before calling the app a fully polished stable macOS distribution.
+
+If macOS says the downloaded dmg or app cannot be opened because Apple cannot
+check it for malicious software, only proceed if you trust this repository and
+the downloaded release asset. You can remove the quarantine flag from the dmg:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/memView.app
+xattr -d com.apple.quarantine /path/to/memView_0.2.1_arm64.dmg
+open /path/to/memView_0.2.1_arm64.dmg
+```
+
+If you already copied the app into Applications or another folder, remove
+quarantine from the app bundle instead:
+
+```bash
+xattr -dr com.apple.quarantine /path/to/memView.app
 ```
 
 ## Features

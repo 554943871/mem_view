@@ -19,15 +19,23 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 [memView_0.2.1_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.1/memView_0.2.1_arm64.dmg)
 
-当前公开构建是 macOS arm64 版本。要把它称为完全稳定的 macOS 正式分发版，
-仍然需要 Apple Developer ID 签名和公证。
+## 重要：macOS Gatekeeper 提示
 
-当前构建是 ad-hoc 签名，但还没有公证。如果下载后 macOS 拦截应用，先核对
-Release notes 里的 SHA-256，再到“隐私与安全性”里选择“仍要打开”，或对已安装
-应用移除 quarantine：
+当前公开构建是 macOS arm64 版本，使用 ad-hoc 签名，但还没有 Apple 公证。
+要把它称为完全稳定的 macOS 正式分发版，仍然需要 Apple Developer ID 签名和公证。
+
+如果下载后 macOS 提示“Apple 无法验证是否包含恶意软件”，请只在你确认信任本仓库和
+下载的 Release 资产时继续。可以先对 dmg 移除 quarantine 标记：
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/memView.app
+xattr -d com.apple.quarantine /path/to/memView_0.2.1_arm64.dmg
+open /path/to/memView_0.2.1_arm64.dmg
+```
+
+如果已经把应用复制到了 Applications 或其他目录，也可以对 app bundle 移除 quarantine：
+
+```bash
+xattr -dr com.apple.quarantine /path/to/memView.app
 ```
 
 ## 功能
