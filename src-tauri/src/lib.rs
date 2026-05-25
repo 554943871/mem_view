@@ -224,7 +224,7 @@ impl MutableNode {
         if parts.len() == 1 {
             self.children.insert(
                 sort_key(&doc.relative_path),
-                MutableNode::new(&doc.id, &doc.title, &doc.kind, Some(doc.path.clone())),
+                MutableNode::new(&doc.id, &tree_doc_title(doc), &doc.kind, Some(doc.path.clone())),
             );
             return;
         }
@@ -261,6 +261,14 @@ fn tree_docs(docs: &[DocMeta]) -> Vec<DocMeta> {
         .filter(|doc| doc.relative_path != "README.md")
         .cloned()
         .collect()
+}
+
+fn tree_doc_title(doc: &DocMeta) -> String {
+    if doc.relative_path.ends_with("/README.md") {
+        "README.md".to_string()
+    } else {
+        doc.title.clone()
+    }
 }
 
 fn build_read_chain(root: &Path, relative_path: &str) -> Vec<ChainItem> {
@@ -395,6 +403,10 @@ mod tests {
             .any(|doc| doc.relative_path == "baseline/README.md"));
         assert!(snapshot.docs.iter().any(|doc| doc.relative_path == "README.md"));
         assert!(!snapshot.tree.iter().any(|node| node.id == "README.md"));
+        assert_eq!(
+            find_tree_node(&snapshot.tree, "baseline/README.md").map(|node| node.title.as_str()),
+            Some("README.md")
+        );
     }
 
     #[test]
@@ -455,7 +467,8 @@ mod tests {
         fs::write(root.join("requirements/R001/tasks/T001/README.md"), "# Task\n")
             .expect("task README should write");
 
-        root
+        root.canonicalize()
+            .expect("test repo should canonicalize after creation")
     }
 
     fn build_temp_dir(label: &str) -> PathBuf {
@@ -469,5 +482,17 @@ mod tests {
             std::process::id(),
             nonce
         ))
+    }
+
+    fn find_tree_node<'a>(nodes: &'a [TreeNode], id: &str) -> Option<&'a TreeNode> {
+        for node in nodes {
+            if node.id == id {
+                return Some(node);
+            }
+            if let Some(child) = find_tree_node(&node.children, id) {
+                return Some(child);
+            }
+        }
+        None
     }
 }
