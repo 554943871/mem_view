@@ -50,6 +50,8 @@
 
   type FlatNode = TreeNode & { depth: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
+  type MarkdownRenderEnv = { headingCounts: Map<string, number> };
+  type LinkTarget = { path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
   type MessagePack = {
@@ -57,10 +59,9 @@
     diagrams: string;
     refresh: string;
     memoryRepo: string;
-    repoPathPlaceholder: string;
-    browse: string;
-    openRepo: string;
-    changeRepo: string;
+    recentRepos: string;
+    noRecentRepos: string;
+    chooseNewRepo: string;
     chooseRepoTitle: string;
     noRepoTitle: string;
     noRepoBody: string;
@@ -98,19 +99,20 @@
 
   const localeStorageKey = "memView.locale";
   const repoPathStorageKey = "memView.repoPath";
+  const recentRepoPathsStorageKey = "memView.recentRepoPaths";
+  const recentRepoLimit = 8;
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
       diagrams: "图",
       refresh: "刷新",
       memoryRepo: "记忆库",
-      repoPathPlaceholder: "选择或输入记忆库目录",
-      browse: "选择",
-      openRepo: "打开记忆库",
-      changeRepo: "切换记忆库",
+      recentRepos: "最近打开",
+      noRecentRepos: "暂无最近记忆库",
+      chooseNewRepo: "选择新记忆库",
       chooseRepoTitle: "选择记忆库目录",
       noRepoTitle: "选择一个本地记忆库",
-      noRepoBody: "memView 不再固定打开某个目录。请选择一个包含 Markdown 记忆文件的本地文件夹。",
+      noRepoBody: "请选择一个 Git 记忆库目录；如果选到仓库内的子目录，memView 会自动打开该 Git 仓库根目录。",
       noRepoSelected: "未选择记忆库",
       chooseRepoFirst: "先选择记忆库",
       searchPlaceholder: "搜索标题或路径",
@@ -172,13 +174,12 @@
       diagrams: "diagrams",
       refresh: "Refresh",
       memoryRepo: "Memory Repo",
-      repoPathPlaceholder: "Choose or enter a memory repo folder",
-      browse: "Choose",
-      openRepo: "Open Repo",
-      changeRepo: "Change Repo",
+      recentRepos: "Recent repos",
+      noRecentRepos: "No recent repos",
+      chooseNewRepo: "Choose New Repo",
       chooseRepoTitle: "Choose Memory Repo",
       noRepoTitle: "Choose a local memory repo",
-      noRepoBody: "memView no longer opens a fixed folder. Choose a local folder that contains Markdown memory files.",
+      noRepoBody: "Choose a Git memory repo folder. If you choose a child folder, memView opens the Git repository root.",
       noRepoSelected: "No repo selected",
       chooseRepoFirst: "Choose a repo first",
       searchPlaceholder: "Search title or path",
@@ -241,6 +242,21 @@
     linkify: true,
     typographer: true
   });
+  const defaultHeadingOpenRenderer = markdown.renderer.rules.heading_open;
+
+  markdown.renderer.rules.heading_open = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const inlineToken = tokens[index + 1];
+    if (inlineToken?.type === "inline") {
+      token.attrSet("id", getUniqueHeadingId(inlineToken.content, env as MarkdownRenderEnv));
+      token.attrJoin("class", "reader-heading");
+      token.attrSet("tabindex", "-1");
+    }
+
+    return defaultHeadingOpenRenderer
+      ? defaultHeadingOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
 
   mermaid.initialize({
     startOnLoad: false,
@@ -255,7 +271,9 @@
   let status: StatusKey = "idle";
   let error = "";
   let repoPath = getInitialRepoPath();
-  let pendingRepoPath = repoPath;
+  let collapsedFolderIds = new Set<string>();
+  let recentRepoPaths = getInitialRecentRepoPaths(repoPath);
+  let selectedRecentRepoPath = recentRepoPaths[0] ?? repoPath;
   let contextOpen = true;
   let zoomedDiagramHtml = "";
   let zoomedDiagramTitle = "";
@@ -271,7 +289,8 @@
   let locale: Locale = getInitialLocale();
 
   $: t = messages[locale];
-  $: flatTree = snapshot ? flattenTree(snapshot.tree) : [];
+  $: repoBusy = status === "indexing" || status === "opening";
+  $: flatTree = snapshot ? flattenTree(snapshot.tree, 0, collapsedFolderIds) : [];
   $: visibleNodes = snapshot
     ? query.trim()
       ? flattenDocs(searchDocs(snapshot.docs, query))
@@ -312,6 +331,52 @@
     return localStorage.getItem(repoPathStorageKey) ?? "";
   }
 
+  function getInitialRecentRepoPaths(initialRepoPath: string) {
+    const paths = parseStoredRecentRepoPaths();
+    return uniqueRepoPaths(initialRepoPath ? [initialRepoPath, ...paths] : paths).slice(
+      0,
+      recentRepoLimit
+    );
+  }
+
+  function parseStoredRecentRepoPaths() {
+    if (typeof localStorage === "undefined") {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(localStorage.getItem(recentRepoPathsStorageKey) ?? "[]");
+      return Array.isArray(parsed)
+        ? parsed.filter((path): path is string => typeof path === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function uniqueRepoPaths(paths: string[]) {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const path of paths) {
+      const trimmed = path.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      unique.push(trimmed);
+    }
+    return unique;
+  }
+
+  function rememberRepoPath(path: string) {
+    recentRepoPaths = uniqueRepoPaths([path, ...recentRepoPaths]).slice(0, recentRepoLimit);
+    selectedRecentRepoPath = path;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(repoPathStorageKey, path);
+      localStorage.setItem(recentRepoPathsStorageKey, JSON.stringify(recentRepoPaths));
+    }
+  }
+
   function setLocale(nextLocale: Locale) {
     locale = nextLocale;
     if (typeof localStorage !== "undefined") {
@@ -348,6 +413,11 @@
     return node.path ? node.title : t.folderTitles[node.title] ?? node.title;
   }
 
+  function repoName(path: string) {
+    const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+    return normalized.split("/").filter(Boolean).pop() ?? path;
+  }
+
   async function browseRepo() {
     const selected = await openDialog({
       directory: true,
@@ -359,14 +429,18 @@
       return;
     }
 
-    pendingRepoPath = selected;
     await loadRepo(selected);
   }
 
-  function handleRepoInputKeydown(event: KeyboardEvent) {
-    if (event.key === "Enter") {
-      void loadRepo(pendingRepoPath);
+  function handleRecentRepoChange(event: Event) {
+    const nextPath = event.currentTarget instanceof HTMLSelectElement
+      ? event.currentTarget.value
+      : selectedRecentRepoPath;
+    if (!nextPath || nextPath === repoPath || repoBusy) {
+      return;
     }
+
+    void loadRepo(nextPath);
   }
 
   async function loadRepo(path = repoPath) {
@@ -385,10 +459,8 @@
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
       repoPath = snapshot.root_path;
-      pendingRepoPath = snapshot.root_path;
-      if (typeof localStorage !== "undefined") {
-        localStorage.setItem(repoPathStorageKey, snapshot.root_path);
-      }
+      collapsedFolderIds = new Set();
+      rememberRepoPath(snapshot.root_path);
       status = "ready";
       const entry =
         snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
@@ -427,7 +499,7 @@
   }
 
   function renderMarkdown(source: string) {
-    return markdown.render(source).replace(
+    return markdown.render(source, { headingCounts: new Map<string, number>() }).replace(
       /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
       (_, encoded: string) => `
         <figure class="diagram-frame">
@@ -456,10 +528,30 @@
     return textarea.value;
   }
 
-  function flattenTree(nodes: TreeNode[], depth = 0): FlatNode[] {
+  function getUniqueHeadingId(content: string, env: MarkdownRenderEnv) {
+    const baseId = slugifyHeading(content);
+    const count = env.headingCounts.get(baseId) ?? 0;
+    env.headingCounts.set(baseId, count + 1);
+    return count === 0 ? baseId : `${baseId}-${count + 1}`;
+  }
+
+  function slugifyHeading(value: string) {
+    const slug = value
+      .trim()
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\p{L}\p{N}\s-]/gu, "")
+      .trim()
+      .replace(/\s+/g, "-");
+
+    return slug || "section";
+  }
+
+  function flattenTree(nodes: TreeNode[], depth = 0, collapsed = new Set<string>()): FlatNode[] {
     return nodes.flatMap((node) => [
       { ...node, depth },
-      ...flattenTree(node.children, depth + 1)
+      ...(collapsed.has(node.id) ? [] : flattenTree(node.children, depth + 1, collapsed))
     ]);
   }
 
@@ -488,12 +580,43 @@
       "nav-row",
       node.path ? "doc" : "folder",
       current?.path === node.path ? "active" : "",
+      !node.path && collapsedFolderIds.has(node.id) ? "collapsed" : "",
       node.kind
     ].join(" ");
   }
 
+  function toggleFolder(node: FlatNode) {
+    const next = new Set(collapsedFolderIds);
+    if (next.has(node.id)) {
+      next.delete(node.id);
+    } else {
+      next.add(node.id);
+    }
+    collapsedFolderIds = next;
+  }
+
+  function handleNodeClick(node: FlatNode) {
+    if (node.path) {
+      void openDocument(node.path);
+      return;
+    }
+
+    if (node.children.length) {
+      toggleFolder(node);
+    }
+  }
+
   async function handleDocumentClick(event: MouseEvent) {
-    const target = event.target as HTMLElement;
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const link = target.closest<HTMLAnchorElement>(".reader a");
+    if (link && await handleReaderLinkClick(event, link)) {
+      return;
+    }
+
     const zoomButton = target.closest<HTMLButtonElement>(".diagram-zoom");
     if (!zoomButton || !zoomButton.closest(".reader")) {
       return;
@@ -510,6 +633,186 @@
     resetDiagramView();
     await tick();
     fitDiagramToViewport();
+  }
+
+  async function handleReaderLinkClick(event: MouseEvent, link: HTMLAnchorElement) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return false;
+    }
+
+    const href = link.getAttribute("href")?.trim() ?? "";
+    if (!href) {
+      return false;
+    }
+
+    if (href.startsWith("#")) {
+      event.preventDefault();
+      await scrollToReaderAnchor(href.slice(1));
+      return true;
+    }
+
+    const target = resolveLinkedDocument(href);
+    if (!target) {
+      return false;
+    }
+
+    event.preventDefault();
+    await openDocument(target.path);
+    if (target.anchor) {
+      await scrollToReaderAnchor(target.anchor);
+    }
+    return true;
+  }
+
+  function resolveLinkedDocument(href: string): LinkTarget | null {
+    if (!snapshot || !current) {
+      return null;
+    }
+
+    const { pathPart, anchor } = splitHref(href);
+    if (isExternalHref(pathPart)) {
+      return null;
+    }
+
+    const normalizedPath = resolveRepoRelativePath(pathPart);
+    if (normalizedPath === null) {
+      return null;
+    }
+
+    const doc = findDocByLinkPath(normalizedPath);
+    return doc ? { path: doc.path, anchor } : null;
+  }
+
+  function splitHref(href: string) {
+    const hashIndex = href.indexOf("#");
+    if (hashIndex === -1) {
+      return { pathPart: stripQuery(href), anchor: "" };
+    }
+
+    return {
+      pathPart: stripQuery(href.slice(0, hashIndex)),
+      anchor: safeDecodeURIComponent(href.slice(hashIndex + 1))
+    };
+  }
+
+  function stripQuery(value: string) {
+    const queryIndex = value.indexOf("?");
+    return queryIndex === -1 ? value : value.slice(0, queryIndex);
+  }
+
+  function isExternalHref(pathPart: string) {
+    return /^[a-z][a-z0-9+.-]*:/i.test(pathPart) && !pathPart.toLowerCase().startsWith("file:");
+  }
+
+  function resolveRepoRelativePath(pathPart: string) {
+    if (!current) {
+      return null;
+    }
+
+    if (!pathPart || pathPart === ".") {
+      return current.relative_path;
+    }
+
+    if (pathPart.toLowerCase().startsWith("file:")) {
+      try {
+        return normalizePathname(safeDecodeURIComponent(new URL(pathPart).pathname));
+      } catch {
+        return null;
+      }
+    }
+
+    const decodedPath = normalizePathname(safeDecodeURIComponent(pathPart));
+    if (decodedPath.startsWith("/")) {
+      return decodedPath;
+    }
+
+    const baseDir = current.relative_path.includes("/")
+      ? current.relative_path.slice(0, current.relative_path.lastIndexOf("/") + 1)
+      : "";
+    return normalizePathSegments(`${baseDir}${decodedPath}`);
+  }
+
+  function normalizePathname(value: string) {
+    return value.replace(/\\/g, "/");
+  }
+
+  function normalizePathSegments(value: string) {
+    const segments: string[] = [];
+    for (const segment of value.split("/")) {
+      if (!segment || segment === ".") {
+        continue;
+      }
+      if (segment === "..") {
+        if (!segments.length) {
+          return null;
+        }
+        segments.pop();
+        continue;
+      }
+      segments.push(segment);
+    }
+
+    return segments.join("/");
+  }
+
+  function findDocByLinkPath(path: string) {
+    if (!snapshot) {
+      return null;
+    }
+
+    const normalized = normalizePathname(path);
+    const absoluteDoc = normalized.startsWith("/")
+      ? snapshot.docs.find((doc) => normalizePathname(doc.path) === normalized)
+      : null;
+    if (absoluteDoc) {
+      return absoluteDoc;
+    }
+
+    const relativePath = normalized.replace(/^\/+/, "");
+    const candidates = [
+      relativePath,
+      relativePath.endsWith("/") ? `${relativePath}README.md` : `${relativePath}/README.md`,
+      relativePath.toLowerCase().endsWith(".md") ? relativePath : `${relativePath}.md`
+    ];
+    return snapshot.docs.find((doc) => candidates.includes(doc.relative_path)) ?? null;
+  }
+
+  async function scrollToReaderAnchor(anchor: string) {
+    const decodedAnchor = safeDecodeURIComponent(anchor).trim();
+    if (!decodedAnchor) {
+      return;
+    }
+
+    await tick();
+    requestAnimationFrame(() => {
+      const target = findReaderAnchor(decodedAnchor);
+      if (!target) {
+        return;
+      }
+
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.focus({ preventScroll: true });
+    });
+  }
+
+  function findReaderAnchor(anchor: string) {
+    const reader = document.querySelector<HTMLElement>(".reader");
+    if (!reader) {
+      return null;
+    }
+
+    const ids = [anchor, slugifyHeading(anchor)];
+    return Array.from(reader.querySelectorAll<HTMLElement>("[id], a[name]")).find((element) =>
+      ids.includes(element.id) || ids.includes(element.getAttribute("name") ?? "")
+    ) ?? null;
+  }
+
+  function safeDecodeURIComponent(value: string) {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
   }
 
   function closeDiagram() {
@@ -727,28 +1030,65 @@
         <h1>memView</h1>
         <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
       </div>
-      <button class="ghost" type="button" disabled={!repoPath} on:click={() => loadRepo(repoPath)}>{t.refresh}</button>
+      <button
+        class="ghost icon-button"
+        type="button"
+        disabled={!repoPath || repoBusy}
+        aria-label={t.refresh}
+        title={t.refresh}
+        on:click={() => loadRepo(repoPath)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 6v5h-5" />
+          <path d="M4 18v-5h5" />
+          <path d="M18.4 9A7 7 0 0 0 6.2 7.2L4 9.3" />
+          <path d="M5.6 15A7 7 0 0 0 17.8 16.8L20 14.7" />
+        </svg>
+      </button>
     </div>
 
     <section class="repo-picker">
-      <label for="repo-path">{t.memoryRepo}</label>
-      <div class="repo-path-row">
-        <input
-          id="repo-path"
-          bind:value={pendingRepoPath}
-          placeholder={t.repoPathPlaceholder}
-          spellcheck="false"
-          on:keydown={handleRepoInputKeydown}
-        />
-        <button class="ghost" type="button" on:click={browseRepo}>{t.browse}</button>
+      <label for="recent-repo">{t.memoryRepo}</label>
+      <div class="repo-recent-row">
+        <select
+          id="recent-repo"
+          bind:value={selectedRecentRepoPath}
+          disabled={!recentRepoPaths.length || repoBusy}
+          aria-label={t.recentRepos}
+          title={selectedRecentRepoPath || t.noRecentRepos}
+          on:change={(event) => handleRecentRepoChange(event)}
+        >
+          {#if recentRepoPaths.length}
+            {#each recentRepoPaths as path (path)}
+              <option value={path}>{repoName(path)}</option>
+            {/each}
+          {:else}
+            <option value="">{t.noRecentRepos}</option>
+          {/if}
+        </select>
+        {#if selectedRecentRepoPath}
+          <button
+            class="repo-info"
+            type="button"
+            title={selectedRecentRepoPath}
+            data-path={selectedRecentRepoPath}
+            aria-label={`${t.path}: ${selectedRecentRepoPath}`}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5" />
+              <path d="M12 8h.01" />
+            </svg>
+          </button>
+        {/if}
       </div>
       <button
         class="repo-open"
         type="button"
-        disabled={!pendingRepoPath.trim()}
-        on:click={() => loadRepo(pendingRepoPath)}
+        disabled={repoBusy}
+        on:click={browseRepo}
       >
-        {snapshot ? t.changeRepo : t.openRepo}
+        {t.chooseNewRepo}
       </button>
     </section>
 
@@ -760,11 +1100,15 @@
           <button
             class={nodeClass(node)}
             style={`--depth: ${node.depth}`}
-            disabled={!node.path}
+            disabled={!node.path && !node.children.length}
             type="button"
-            on:click={() => node.path && openDocument(node.path)}
+            aria-expanded={node.path ? undefined : !collapsedFolderIds.has(node.id)}
+            on:click={() => handleNodeClick(node)}
             title={node.path ?? displayNodeTitle(node)}
           >
+            {#if !node.path}
+              <span class="folder-chevron" aria-hidden="true"></span>
+            {/if}
             <span class="node-title">{displayNodeTitle(node)}</span>
             {#if node.path}
               <span class="node-meta">{formatKind(node.kind)}{node.title.endsWith(".md") ? "" : ""}</span>
@@ -826,7 +1170,9 @@
           <p>{t.noRepoBody}</p>
         </div>
         <div class="repo-empty-actions">
-          <button class="repo-open" type="button" on:click={browseRepo}>{t.browse}</button>
+          <button class="repo-open" type="button" disabled={repoBusy} on:click={browseRepo}>
+            {t.chooseNewRepo}
+          </button>
         </div>
       </section>
     {/if}

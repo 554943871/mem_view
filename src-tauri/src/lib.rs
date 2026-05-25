@@ -71,7 +71,7 @@ fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
 
     Ok(RepoSnapshot {
         root_path: root.to_string_lossy().to_string(),
-        tree: build_tree(&docs),
+        tree: build_tree(&tree_docs(&docs)),
         docs,
         counts,
     })
@@ -117,7 +117,23 @@ fn normalize_repo_path(repo_path: &str) -> Result<PathBuf, String> {
     if !canonical.is_dir() {
         return Err(format!("记忆库路径不是目录：{}", canonical.display()));
     }
-    Ok(canonical)
+    find_git_root(&canonical).ok_or_else(|| {
+        format!(
+            "记忆库必须是 Git 项目：{}（请选择仓库根目录或仓库内目录）",
+            canonical.display()
+        )
+    })
+}
+
+fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path;
+    loop {
+        let dot_git = current.join(".git");
+        if dot_git.is_dir() || dot_git.is_file() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
 }
 
 fn scan_markdown_docs(root: &Path) -> Result<Vec<DocMeta>, String> {
@@ -240,6 +256,13 @@ impl MutableNode {
     }
 }
 
+fn tree_docs(docs: &[DocMeta]) -> Vec<DocMeta> {
+    docs.iter()
+        .filter(|doc| doc.relative_path != "README.md")
+        .cloned()
+        .collect()
+}
+
 fn build_read_chain(root: &Path, relative_path: &str) -> Vec<ChainItem> {
     let mut chain = Vec::new();
     let parts: Vec<&str> = relative_path.split('/').collect();
@@ -360,14 +383,41 @@ mod tests {
     #[test]
     fn scans_memory_repo() {
         let root = build_test_repo();
-        let snapshot = scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
+        let snapshot =
+            scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
 
+        assert_eq!(snapshot.root_path, root.to_string_lossy().to_string());
         assert_eq!(snapshot.counts.markdown, 4);
         assert_eq!(snapshot.counts.mermaid, 1);
         assert!(snapshot
             .docs
             .iter()
             .any(|doc| doc.relative_path == "baseline/README.md"));
+        assert!(snapshot.docs.iter().any(|doc| doc.relative_path == "README.md"));
+        assert!(!snapshot.tree.iter().any(|node| node.id == "README.md"));
+    }
+
+    #[test]
+    fn scans_from_child_directory_at_git_root() {
+        let root = build_test_repo();
+        let child = root.join("requirements/R001/tasks");
+        let snapshot = scan_repo(child.to_string_lossy().to_string())
+            .expect("child dir should resolve to git root");
+
+        assert_eq!(snapshot.root_path, root.to_string_lossy().to_string());
+        assert!(snapshot.docs.iter().any(|doc| doc.relative_path == "README.md"));
+    }
+
+    #[test]
+    fn rejects_non_git_directory() {
+        let root = build_temp_dir("non-git");
+        fs::create_dir_all(&root).expect("non-git test dir should create");
+        fs::write(root.join("README.md"), "# Not A Memory Repo\n").expect("README should write");
+
+        let err = scan_repo(root.to_string_lossy().to_string())
+            .expect_err("non-git dir should be rejected");
+
+        assert!(err.contains("Git"));
     }
 
     #[test]
@@ -378,7 +428,7 @@ mod tests {
             repo_path,
             root.join("baseline/README.md").to_string_lossy().to_string(),
         )
-            .expect("baseline README should read");
+        .expect("baseline README should read");
 
         assert_eq!(doc.kind, "baseline");
         assert!(doc.markdown.contains("# "));
@@ -386,23 +436,38 @@ mod tests {
     }
 
     fn build_test_repo() -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("mem-view-test-{}-{}", std::process::id(), nonce));
+        let root = build_temp_dir("test");
 
-        fs::create_dir_all(root.join("baseline/10-standards")).expect("test directories should create");
-        fs::create_dir_all(root.join("requirements/R001/tasks/T001")).expect("test directories should create");
+        fs::create_dir_all(root.join(".git")).expect("git metadata directory should create");
+        fs::create_dir_all(root.join("baseline/10-standards"))
+            .expect("test directories should create");
+        fs::create_dir_all(root.join("requirements/R001/tasks/T001"))
+            .expect("test directories should create");
 
         fs::write(root.join("README.md"), "# Test Memory\n").expect("root README should write");
-        fs::write(root.join("baseline/README.md"), "# Baseline\n\n```mermaid\ngraph TD\n  A --> B\n```\n")
-            .expect("baseline README should write");
+        fs::write(
+            root.join("baseline/README.md"),
+            "# Baseline\n\n```mermaid\ngraph TD\n  A --> B\n```\n",
+        )
+        .expect("baseline README should write");
         fs::write(root.join("baseline/10-standards/rules.md"), "# Rules\n")
             .expect("rules doc should write");
         fs::write(root.join("requirements/R001/tasks/T001/README.md"), "# Task\n")
             .expect("task README should write");
 
         root
+    }
+
+    fn build_temp_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "mem-view-{}-{}-{}",
+            label,
+            std::process::id(),
+            nonce
+        ))
     }
 }
