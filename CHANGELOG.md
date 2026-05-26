@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.6
+
+- Fixed Find so it consistently shows the current and total match count.
+- Show `0 / 0` when a query has no matches.
+
 ## v0.2.5
 
 - Added Find in the currently open Markdown document.

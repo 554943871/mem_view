@@ -434,6 +434,7 @@
   $: headerPath = activeViewIsFile
     ? current?.path ?? activeView?.path ?? t.noRepoSelected
     : current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected);
+  $: findStatus = formatFindStatus();
 
   onMount(() => {
     document.documentElement.lang = locale;
@@ -1386,7 +1387,10 @@
     activeFindIndex = 0;
   }
 
-  function handleFindInput() {
+  function handleFindInput(event: Event) {
+    if (event.currentTarget instanceof HTMLInputElement) {
+      findQuery = event.currentTarget.value;
+    }
     activeFindIndex = 0;
     void refreshFindHighlights({ scroll: true });
   }
@@ -1396,11 +1400,7 @@
       return "";
     }
 
-    if (!findMatchCount) {
-      return t.findNoMatches;
-    }
-
-    return `${activeFindIndex + 1} / ${findMatchCount}`;
+    return `${findMatchCount ? activeFindIndex + 1 : 0} / ${findMatchCount}`;
   }
 
   async function refreshFindHighlights({ scroll = false } = {}) {
@@ -2126,14 +2126,14 @@
           <input
             class="find-input"
             bind:this={findInput}
-            bind:value={findQuery}
+            value={findQuery}
             type="search"
             placeholder={t.findPlaceholder}
             aria-label={t.findDocument}
             on:input={handleFindInput}
           />
           <span class="find-status" class:empty={Boolean(findQuery.trim() && !findMatchCount)}>
-            {formatFindStatus()}
+            {findStatus}
           </span>
           <button
             class="ghost icon-button"
