@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.7
+
+- Keep the current Markdown document open when refreshing the repository index.
+- Restore the reader scroll position after refresh when the same document still exists.
+- Fall back to the default README only when the previously open document is gone.
+- Changed the update check toolbar icon so it no longer looks like a download action.
+
 ## v0.2.6
 
 - Fixed Find so it consistently shows the current and total match count.

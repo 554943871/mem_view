@@ -63,6 +63,12 @@
     title: string;
     path: string;
   };
+  type LoadRepoOptions = {
+    preserveCurrentDocument?: boolean;
+  };
+  type OpenDocumentOptions = {
+    restoreScrollTop?: number;
+  };
   type LinkTarget = { type: ViewType; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
@@ -829,7 +835,7 @@
     void loadRepo(nextPath);
   }
 
-  async function loadRepo(path = repoPath) {
+  async function loadRepo(path = repoPath, options: LoadRepoOptions = {}) {
     const nextRepoPath = path.trim();
     if (!nextRepoPath) {
       status = "idle";
@@ -840,6 +846,12 @@
       return;
     }
 
+    const preservedRelativePath = options.preserveCurrentDocument ? repoCurrent?.relative_path : "";
+    const preservedScrollTop = options.preserveCurrentDocument ? getReaderScrollTop() : undefined;
+    const preservedCollapsedFolderIds = options.preserveCurrentDocument
+      ? new Set(collapsedFolderIds)
+      : null;
+
     status = "indexing";
     error = "";
     try {
@@ -847,15 +859,20 @@
       repoPath = snapshot.root_path;
       upsertOpenView(createRepoView(snapshot.root_path));
       activeViewId = repoViewId;
-      collapsedFolderIds = getDefaultCollapsedFolderIds(snapshot.tree);
+      collapsedFolderIds = preservedCollapsedFolderIds ?? getDefaultCollapsedFolderIds(snapshot.tree);
       rememberRepoPath(snapshot.root_path);
       status = "ready";
-      const entry =
+      const preservedEntry = preservedRelativePath
+        ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath)
+        : null;
+      const entry = preservedEntry ??
         snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
         snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md") ??
         snapshot.docs[0];
       if (entry) {
-        await openDocument(entry.path);
+        await openDocument(entry.path, {
+          restoreScrollTop: preservedEntry ? preservedScrollTop : undefined
+        });
       }
     } catch (err) {
       snapshot = null;
@@ -869,7 +886,11 @@
     }
   }
 
-  async function openDocument(path: string) {
+  function getReaderScrollTop() {
+    return document.querySelector<HTMLElement>(".reader")?.scrollTop ?? 0;
+  }
+
+  async function openDocument(path: string, options: OpenDocumentOptions = {}) {
     if (!repoPath) {
       status = "idle";
       return;
@@ -885,6 +906,12 @@
       renderedHtml = renderMarkdown(repoCurrent.markdown);
       status = "ready";
       await completeRenderedDocumentUpdate();
+      if (options.restoreScrollTop !== undefined) {
+        const reader = document.querySelector<HTMLElement>(".reader");
+        if (reader) {
+          reader.scrollTop = options.restoreScrollTop;
+        }
+      }
     } catch (err) {
       error = String(err);
       status = "error";
@@ -1934,7 +1961,7 @@
         disabled={!repoPath || repoBusy}
         aria-label={t.refresh}
         title={t.refresh}
-        on:click={() => loadRepo(repoPath)}
+        on:click={() => loadRepo(repoPath, { preserveCurrentDocument: true })}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 6v5h-5" />
@@ -2024,9 +2051,10 @@
           on:click={checkForUpdates}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3v12" />
-            <path d="m7 10 5 5 5-5" />
-            <path d="M5 21h14" />
+            <path d="M20 11a8 8 0 0 0-14.5-4.7L3 9" />
+            <path d="M3 5v4h4" />
+            <path d="M4 13a8 8 0 0 0 8 7c2.2 0 4.2-.9 5.7-2.3" />
+            <path d="m14 12 2 2 4-5" />
           </svg>
         </button>
         {#if updateMessage}
