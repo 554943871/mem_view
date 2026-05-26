@@ -13,11 +13,11 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.2.3](https://github.com/554943871/mem_view/releases/tag/v0.2.3)
+[Download memView v0.2.4](https://github.com/554943871/mem_view/releases/tag/v0.2.4)
 
 Direct dmg asset:
 
-[memView_0.2.3_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.3/memView_0.2.3_arm64.dmg)
+[memView_0.2.4_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.4/memView_0.2.4_arm64.dmg)
 
 ## Important: macOS Gatekeeper Notice
 
@@ -30,8 +30,8 @@ check it for malicious software, only proceed if you trust this repository and
 the downloaded release asset. You can remove the quarantine flag from the dmg:
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.3_arm64.dmg
-open /path/to/memView_0.2.3_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.4_arm64.dmg
+open /path/to/memView_0.2.4_arm64.dmg
 ```
 
 If you already copied the app into Applications or another folder, remove
@@ -109,6 +109,18 @@ Build the macOS app and dmg:
 npm run build
 ```
 
+Build only the app and signed updater package:
+
+```bash
+npm run build:updater
+```
+
+Generate the GitHub Release updater metadata:
+
+```bash
+npm run release:latest-json
+```
+
 Verify the macOS release signature before uploading:
 
 ```bash
@@ -120,11 +132,17 @@ Build outputs:
 ```text
 src-tauri/target/release/bundle/macos/memView.app
 src-tauri/target/release/bundle/dmg/memView_0.2.0_x64.dmg
+dist-release/latest.json
+dist-release/memView_<version>_arm64.dmg
+dist-release/memView_<version>_arm64.app.tar.gz
 ```
 
 The generated dmg name may include `x64` when the local Node.js runtime is
 x64. Check the actual app binary with `file`; current releases are uploaded as
 `arm64` assets when the binary is arm64.
+
+Online updates use the Tauri updater and the GitHub Release asset
+`latest.json`; no separate update server is required.
 
 ## Repository Path
 

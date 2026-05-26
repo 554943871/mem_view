@@ -604,6 +604,33 @@ h1 {
   padding: 0 9px;
 }
 
+.update-message {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  height: 26px;
+  overflow: hidden;
+  border: 1px solid #d7ddd9;
+  border-radius: 999px;
+  background: #edf4f0;
+  color: #294d3f;
+  font-size: 12px;
+  padding: 0 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-message.error {
+  border-color: #efc7be;
+  background: #fff6f4;
+  color: #8d2f25;
+}
+
+.update-action {
+  height: 26px;
+  padding: 0 9px;
+}
+
 .status.error {
   background: #f6ded9;
   color: #9b3327;

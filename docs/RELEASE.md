@@ -5,7 +5,9 @@ Use this checklist before publishing a public macOS build.
 ## Required Checks
 
 - `npm run check`
-- `npm run build`
+- `npm run build:updater`
+- `npm run release:latest-json`
+- `npm run build` when publishing a dmg installer
 - Launch the generated app from `src-tauri/target/release/bundle/macos/memView.app`
 - Open a memory repository with the folder picker
 - Restart the app and confirm the last repository reopens
@@ -58,6 +60,38 @@ Current local builds on this machine are arm64 builds. Publish the dmg as:
 
 ```text
 memView_<version>_arm64.dmg
+```
+
+The app also supports Tauri online updates through GitHub Releases. The updater
+uses this static endpoint:
+
+```text
+https://github.com/554943871/mem_view/releases/latest/download/latest.json
+```
+
+The updater signing key for this machine is stored outside the repo at:
+
+```text
+~/.tauri/memview-updater.key
+```
+
+`npm run build` and `npm run build:updater` automatically read that local key
+when no other
+`TAURI_SIGNING_PRIVATE_KEY` is set. You can also point
+`TAURI_SIGNING_PRIVATE_KEY_PATH` at a different key file. After building the
+updater package, run:
+
+```bash
+npm run release:latest-json
+```
+
+Upload these generated files to the same GitHub release as the dmg:
+
+```text
+dist-release/memView_<version>_arm64.dmg
+dist-release/memView_<version>_arm64.app.tar.gz
+dist-release/memView_<version>_arm64.app.tar.gz.sig
+dist-release/latest.json
 ```
 
 If Intel macOS support is required, build and test an x64 or universal artifact

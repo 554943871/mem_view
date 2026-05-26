@@ -13,11 +13,11 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.2.3](https://github.com/554943871/mem_view/releases/tag/v0.2.3)
+[下载 memView v0.2.4](https://github.com/554943871/mem_view/releases/tag/v0.2.4)
 
 直接下载 dmg：
 
-[memView_0.2.3_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.3/memView_0.2.3_arm64.dmg)
+[memView_0.2.4_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.4/memView_0.2.4_arm64.dmg)
 
 ## 重要：macOS Gatekeeper 提示
 
@@ -28,8 +28,8 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 下载的 Release 资产时继续。可以先对 dmg 移除 quarantine 标记：
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.3_arm64.dmg
-open /path/to/memView_0.2.3_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.4_arm64.dmg
+open /path/to/memView_0.2.4_arm64.dmg
 ```
 
 如果已经把应用复制到了 Applications 或其他目录，也可以对 app bundle 移除 quarantine：
@@ -106,6 +106,18 @@ npm run check
 npm run build
 ```
 
+只构建 app 和已签名的 updater 包：
+
+```bash
+npm run build:updater
+```
+
+生成 GitHub Release 在线更新元数据：
+
+```bash
+npm run release:latest-json
+```
+
 上传前校验 macOS Release 签名：
 
 ```bash
@@ -117,11 +129,17 @@ npm run verify:mac-release -- src-tauri/target/release/bundle/macos/memView.app
 ```text
 src-tauri/target/release/bundle/macos/memView.app
 src-tauri/target/release/bundle/dmg/memView_0.2.0_x64.dmg
+dist-release/latest.json
+dist-release/memView_<version>_arm64.dmg
+dist-release/memView_<version>_arm64.app.tar.gz
 ```
 
 如果本机 Node.js 运行时是 x64，Tauri 生成的 dmg 文件名可能仍带 `x64`。
 以 `file` 检查 app 二进制为准；当前 Release 会在二进制为 arm64 时上传为
 `arm64` 资产名。
+
+在线更新使用 Tauri updater 和 GitHub Release 里的 `latest.json`，不需要额外
+维护更新服务端。
 
 ## 记忆库路径
 

@@ -3,6 +3,8 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { relaunch } from "@tauri-apps/plugin-process";
+  import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
   import MarkdownIt from "markdown-it";
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
@@ -64,6 +66,7 @@
   type LinkTarget = { type: ViewType; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
+  type UpdateState = "idle" | "checking" | "downloading" | "installing";
   type MessagePack = {
     docs: string;
     diagrams: string;
@@ -73,6 +76,15 @@
     noRecentRepos: string;
     chooseNewRepo: string;
     openMarkdownFile: string;
+    checkUpdate: string;
+    updateNow: string;
+    updateAvailable: string;
+    checkingUpdate: string;
+    downloadingUpdate: string;
+    installingUpdate: string;
+    noUpdate: string;
+    updateReady: string;
+    updateFailed: string;
     dropMarkdownFile: string;
     dropUnsupported: string;
     closeView: string;
@@ -134,6 +146,15 @@
       noRecentRepos: "暂无最近记忆库",
       chooseNewRepo: "选择新记忆库",
       openMarkdownFile: "打开 Markdown 文件",
+      checkUpdate: "检查更新",
+      updateNow: "更新",
+      updateAvailable: "发现新版本",
+      checkingUpdate: "正在检查更新",
+      downloadingUpdate: "正在下载更新",
+      installingUpdate: "正在安装更新",
+      noUpdate: "已是最新版本",
+      updateReady: "更新已安装，正在重启",
+      updateFailed: "更新失败",
       dropMarkdownFile: "松开以打开 Markdown 文件",
       dropUnsupported: "请拖入 .md 文件",
       closeView: "关闭视图",
@@ -213,6 +234,15 @@
       noRecentRepos: "No recent repos",
       chooseNewRepo: "Choose New Repo",
       openMarkdownFile: "Open Markdown File",
+      checkUpdate: "Check for Updates",
+      updateNow: "Update",
+      updateAvailable: "Update available",
+      checkingUpdate: "Checking for updates",
+      downloadingUpdate: "Downloading update",
+      installingUpdate: "Installing update",
+      noUpdate: "Already up to date",
+      updateReady: "Update installed, relaunching",
+      updateFailed: "Update failed",
       dropMarkdownFile: "Drop to open Markdown file",
       dropUnsupported: "Drop .md files only",
       closeView: "Close view",
@@ -334,6 +364,11 @@
   let query = "";
   let status: StatusKey = "idle";
   let error = "";
+  let updateState: UpdateState = "idle";
+  let updateMessage = "";
+  let updateError = false;
+  let updateProgress: number | null = null;
+  let pendingUpdateVersion = "";
   let repoPath = getInitialRepoPath();
   let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
   let activeViewId = openViews[0]?.id ?? "";
@@ -363,6 +398,7 @@
   $: activeViewIsFile = activeView?.type === "file";
   $: showSidebar = sidebarOpen && !activeViewIsFile;
   $: repoBusy = status === "indexing" || status === "opening";
+  $: updateBusy = updateState !== "idle";
   $: flatTree = snapshot ? flattenTree(snapshot.tree, 0, collapsedFolderIds) : [];
   $: visibleNodes = snapshot
     ? query.trim()
@@ -381,6 +417,7 @@
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
     void setupDragDrop();
+    void checkForStartupUpdate();
     if (repoPath) {
       void loadRepo(repoPath);
     }
@@ -665,6 +702,87 @@
     }
 
     await openMarkdownFile(selected);
+  }
+
+  async function checkForUpdates() {
+    if (updateState !== "idle") {
+      return;
+    }
+
+    updateState = "checking";
+    updateMessage = t.checkingUpdate;
+    updateError = false;
+    updateProgress = null;
+    pendingUpdateVersion = "";
+
+    try {
+      const update = await check({ timeout: 30000 });
+      if (!update) {
+        updateState = "idle";
+        updateMessage = t.noUpdate;
+        pendingUpdateVersion = "";
+        return;
+      }
+
+      let downloaded = 0;
+      let contentLength = 0;
+      updateState = "downloading";
+      updateMessage = `${t.downloadingUpdate} ${update.version}`;
+
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === "Started") {
+          downloaded = 0;
+          contentLength = event.data.contentLength ?? 0;
+          updateProgress = null;
+          return;
+        }
+
+        if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          updateProgress = contentLength > 0
+            ? Math.min(99, Math.floor((downloaded / contentLength) * 100))
+            : null;
+          return;
+        }
+
+        updateState = "installing";
+        updateMessage = t.installingUpdate;
+        updateProgress = null;
+      });
+
+      updateMessage = t.updateReady;
+      await relaunch();
+    } catch (err) {
+      updateState = "idle";
+      updateError = true;
+      updateProgress = null;
+      updateMessage = `${t.updateFailed}: ${String(err)}`;
+    }
+  }
+
+  async function checkForStartupUpdate() {
+    if (updateState !== "idle") {
+      return;
+    }
+
+    updateState = "checking";
+    updateError = false;
+    updateProgress = null;
+
+    try {
+      const update = await check({ timeout: 30000 });
+      if (update) {
+        pendingUpdateVersion = update.version;
+        updateMessage = `${t.updateAvailable} ${update.version}`;
+        await update.close();
+      } else {
+        pendingUpdateVersion = "";
+      }
+    } catch (err) {
+      console.warn("Startup update check failed", err);
+    } finally {
+      updateState = "idle";
+    }
   }
 
   function handleRecentRepoChange(event: Event) {
@@ -1677,6 +1795,35 @@
         </div>
       </div>
       <div class="head-actions">
+        <button
+          class="ghost icon-button"
+          type="button"
+          disabled={updateBusy}
+          aria-label={t.checkUpdate}
+          title={updateMessage || t.checkUpdate}
+          on:click={checkForUpdates}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 21h14" />
+          </svg>
+        </button>
+        {#if updateMessage}
+          <span class="update-message" class:error={updateError} title={updateMessage}>
+            {updateMessage}{updateProgress !== null ? ` ${updateProgress}%` : ""}
+          </span>
+          {#if pendingUpdateVersion && !updateBusy}
+            <button
+              class="ghost update-action"
+              type="button"
+              title={`${t.updateNow} ${pendingUpdateVersion}`}
+              on:click={checkForUpdates}
+            >
+              {t.updateNow}
+            </button>
+          {/if}
+        {/if}
         <button
           class="ghost icon-button"
           type="button"

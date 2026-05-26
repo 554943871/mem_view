@@ -417,6 +417,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![scan_repo, read_document, read_markdown_file])
         .run(tauri::generate_context!())
         .expect("error while running memView");

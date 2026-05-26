@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.4
+
+- Added GitHub Release based online updates through Tauri updater.
+- Added startup update checks with an explicit user-triggered update button.
+- Added release scripts for signed updater packages and `latest.json`.
+
 ## v0.2.1
 
 - Replaced the default placeholder app icon with a polished memView icon.

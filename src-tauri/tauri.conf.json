@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "memView",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "identifier": "io.github.user554943871.memview",
   "build": {
     "beforeDevCommand": "npm run dev:web",
@@ -26,6 +26,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -36,6 +37,14 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5QkYxNjlFNDRFQzJBNTUKUldSVkt1eEVuaGEvNmJJenRFVEpmZnNkSm8zcDdXdjNPVk8ycFZhMm9iUlByQTVHbXg3QmE1OHEK",
+      "endpoints": [
+        "https://github.com/554943871/mem_view/releases/latest/download/latest.json"
+      ]
     }
   }
 }
