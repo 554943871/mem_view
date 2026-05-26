@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import MarkdownIt from "markdown-it";
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
@@ -52,7 +54,14 @@
   type DocHeading = { id: string; title: string; level: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
   type MarkdownRenderEnv = { headingCounts: Map<string, number> };
-  type LinkTarget = { path: string; anchor: string };
+  type ViewType = "repo" | "file";
+  type OpenView = {
+    id: string;
+    type: ViewType;
+    title: string;
+    path: string;
+  };
+  type LinkTarget = { type: ViewType; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
   type MessagePack = {
@@ -63,7 +72,13 @@
     recentRepos: string;
     noRecentRepos: string;
     chooseNewRepo: string;
+    openMarkdownFile: string;
+    dropMarkdownFile: string;
+    dropUnsupported: string;
+    closeView: string;
+    openViews: string;
     chooseRepoTitle: string;
+    chooseFileTitle: string;
     noRepoTitle: string;
     noRepoBody: string;
     noRepoSelected: string;
@@ -106,6 +121,8 @@
   const localeStorageKey = "memView.locale";
   const repoPathStorageKey = "memView.repoPath";
   const recentRepoPathsStorageKey = "memView.recentRepoPaths";
+  const repoViewId = "repo";
+  const fileViewPrefix = "file:";
   const recentRepoLimit = 8;
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
@@ -116,7 +133,13 @@
       recentRepos: "最近打开",
       noRecentRepos: "暂无最近记忆库",
       chooseNewRepo: "选择新记忆库",
+      openMarkdownFile: "打开 Markdown 文件",
+      dropMarkdownFile: "松开以打开 Markdown 文件",
+      dropUnsupported: "请拖入 .md 文件",
+      closeView: "关闭视图",
+      openViews: "打开的视图",
       chooseRepoTitle: "选择记忆库目录",
+      chooseFileTitle: "打开 Markdown 文件",
       noRepoTitle: "选择一个本地记忆库",
       noRepoBody: "请选择一个 Git 记忆库目录；如果选到仓库内的子目录，memView 会自动打开该 Git 仓库根目录。",
       noRepoSelected: "未选择记忆库",
@@ -165,6 +188,7 @@
         mission: "任务组",
         task: "任务",
         document: "文档",
+        markdown_file: "Markdown 文件",
         folder: "目录"
       },
       chainLabels: {
@@ -188,7 +212,13 @@
       recentRepos: "Recent repos",
       noRecentRepos: "No recent repos",
       chooseNewRepo: "Choose New Repo",
+      openMarkdownFile: "Open Markdown File",
+      dropMarkdownFile: "Drop to open Markdown file",
+      dropUnsupported: "Drop .md files only",
+      closeView: "Close view",
+      openViews: "Open views",
       chooseRepoTitle: "Choose Memory Repo",
+      chooseFileTitle: "Open Markdown File",
       noRepoTitle: "Choose a local memory repo",
       noRepoBody: "Choose a Git memory repo folder. If you choose a child folder, memView opens the Git repository root.",
       noRepoSelected: "No repo selected",
@@ -237,6 +267,7 @@
         mission: "mission",
         task: "task",
         document: "document",
+        markdown_file: "Markdown file",
         folder: "folder"
       },
       chainLabels: {
@@ -298,11 +329,15 @@
 
   let snapshot: RepoSnapshot | null = null;
   let current: Document | null = null;
+  let repoCurrent: Document | null = null;
   let renderedHtml = "";
   let query = "";
   let status: StatusKey = "idle";
   let error = "";
   let repoPath = getInitialRepoPath();
+  let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
+  let activeViewId = openViews[0]?.id ?? "";
+  let fileDocuments = new Map<string, Document>();
   let collapsedFolderIds = new Set<string>();
   let recentRepoPaths = getInitialRecentRepoPaths(repoPath);
   let selectedRecentRepoPath = recentRepoPaths[0] ?? repoPath;
@@ -320,8 +355,13 @@
   let panOriginX = 0;
   let panOriginY = 0;
   let locale: Locale = getInitialLocale();
+  let isDragHovering = false;
+  let dragDropUnlisten: UnlistenFn | null = null;
 
   $: t = messages[locale];
+  $: activeView = getOpenView(activeViewId);
+  $: activeViewIsFile = activeView?.type === "file";
+  $: showSidebar = sidebarOpen && !activeViewIsFile;
   $: repoBusy = status === "indexing" || status === "opening";
   $: flatTree = snapshot ? flattenTree(snapshot.tree, 0, collapsedFolderIds) : [];
   $: visibleNodes = snapshot
@@ -330,11 +370,17 @@
       : flatTree
     : [];
   $: docHeadings = current ? getDocumentHeadings(current.markdown) : [];
+  $: headerKind = activeViewIsFile ? "markdown_file" : current?.kind ?? "repo";
+  $: headerTitle = current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle);
+  $: headerPath = activeViewIsFile
+    ? current?.path ?? activeView?.path ?? t.noRepoSelected
+    : current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected);
 
   onMount(() => {
     document.documentElement.lang = locale;
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
+    void setupDragDrop();
     if (repoPath) {
       void loadRepo(repoPath);
     }
@@ -343,7 +389,46 @@
   onDestroy(() => {
     document.removeEventListener("click", handleDocumentClick);
     window.removeEventListener("resize", handleWindowResize);
+    dragDropUnlisten?.();
   });
+
+  async function setupDragDrop() {
+    try {
+      dragDropUnlisten = await getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          isDragHovering = true;
+          return;
+        }
+
+        if (event.payload.type === "leave") {
+          isDragHovering = false;
+          return;
+        }
+
+        isDragHovering = false;
+        void openDroppedMarkdownFiles(event.payload.paths);
+      });
+    } catch (err) {
+      console.warn("File drag and drop setup failed", err);
+    }
+  }
+
+  async function openDroppedMarkdownFiles(paths: string[]) {
+    const markdownPaths = paths.filter(isMarkdownPath);
+    if (!markdownPaths.length) {
+      error = t.dropUnsupported;
+      status = "error";
+      return;
+    }
+
+    for (const path of markdownPaths) {
+      await openMarkdownFile(path);
+    }
+  }
+
+  function isMarkdownPath(path: string) {
+    return /\.md$/i.test(path.trim());
+  }
 
   function getInitialLocale(): Locale {
     if (typeof localStorage !== "undefined") {
@@ -453,6 +538,106 @@
     return normalized.split("/").filter(Boolean).pop() ?? path;
   }
 
+  function createRepoView(path: string): OpenView {
+    return {
+      id: repoViewId,
+      type: "repo",
+      title: repoName(path) || "Memory Repo",
+      path
+    };
+  }
+
+  function createFileView(doc: Document): OpenView {
+    return {
+      id: fileViewId(doc.path),
+      type: "file",
+      title: doc.title || repoName(doc.path),
+      path: doc.path
+    };
+  }
+
+  function fileViewId(path: string) {
+    return `${fileViewPrefix}${normalizePathname(path)}`;
+  }
+
+  function getOpenView(id: string) {
+    return openViews.find((view) => view.id === id) ?? null;
+  }
+
+  function upsertOpenView(view: OpenView) {
+    const existing = openViews.findIndex((item) => item.id === view.id);
+    openViews = existing === -1
+      ? [...openViews, view]
+      : openViews.map((item, index) => index === existing ? view : item);
+  }
+
+  function findFileView(path: string) {
+    const normalized = normalizePathname(path);
+    return openViews.find(
+      (view) => view.type === "file" && normalizePathname(view.path) === normalized
+    ) ?? null;
+  }
+
+  async function activateView(id: string) {
+    if (!getOpenView(id)) {
+      return;
+    }
+
+    activeViewId = id;
+    error = "";
+    await renderActiveView();
+  }
+
+  function closeView(event: MouseEvent, id: string) {
+    event.stopPropagation();
+    if (openViews.length <= 1) {
+      return;
+    }
+
+    const closingIndex = openViews.findIndex((view) => view.id === id);
+    if (closingIndex === -1) {
+      return;
+    }
+
+    const closingView = openViews[closingIndex];
+    const nextViews = openViews.filter((view) => view.id !== id);
+    if (closingView.type === "file") {
+      const nextFileDocuments = new Map(fileDocuments);
+      nextFileDocuments.delete(id);
+      fileDocuments = nextFileDocuments;
+    }
+    openViews = nextViews;
+
+    if (activeViewId !== id) {
+      return;
+    }
+
+    const nextView = nextViews[Math.min(closingIndex, nextViews.length - 1)] ?? null;
+    activeViewId = nextView?.id ?? "";
+    void renderActiveView();
+  }
+
+  async function renderActiveView() {
+    const view = getOpenView(activeViewId);
+    if (!view) {
+      current = null;
+      renderedHtml = "";
+      status = "idle";
+      return;
+    }
+
+    current = view.type === "repo" ? repoCurrent : fileDocuments.get(view.id) ?? null;
+    renderedHtml = current ? renderMarkdown(current.markdown) : "";
+    status = current || (view.type === "repo" && snapshot) ? "ready" : "idle";
+    if (!current) {
+      return;
+    }
+
+    await tick();
+    enhanceRenderedTables();
+    await renderMermaid();
+  }
+
   async function browseRepo() {
     const selected = await openDialog({
       directory: true,
@@ -467,11 +652,32 @@
     await loadRepo(selected);
   }
 
+  async function browseMarkdownFile() {
+    const selected = await openDialog({
+      directory: false,
+      multiple: false,
+      title: t.chooseFileTitle,
+      filters: [{ name: "Markdown", extensions: ["md"] }]
+    });
+
+    if (typeof selected !== "string") {
+      return;
+    }
+
+    await openMarkdownFile(selected);
+  }
+
   function handleRecentRepoChange(event: Event) {
     const nextPath = event.currentTarget instanceof HTMLSelectElement
       ? event.currentTarget.value
       : selectedRecentRepoPath;
-    if (!nextPath || nextPath === repoPath || repoBusy) {
+    if (!nextPath || repoBusy) {
+      return;
+    }
+
+    if (nextPath === repoPath && snapshot) {
+      upsertOpenView(createRepoView(repoPath));
+      void activateView(repoViewId);
       return;
     }
 
@@ -494,6 +700,8 @@
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
       repoPath = snapshot.root_path;
+      upsertOpenView(createRepoView(snapshot.root_path));
+      activeViewId = repoViewId;
       collapsedFolderIds = getDefaultCollapsedFolderIds(snapshot.tree);
       rememberRepoPath(snapshot.root_path);
       status = "ready";
@@ -506,8 +714,11 @@
       }
     } catch (err) {
       snapshot = null;
-      current = null;
-      renderedHtml = "";
+      repoCurrent = null;
+      if (getOpenView(activeViewId)?.type !== "file") {
+        current = null;
+        renderedHtml = "";
+      }
       error = String(err);
       status = "error";
     }
@@ -519,15 +730,53 @@
       return;
     }
 
+    upsertOpenView(createRepoView(repoPath));
+    activeViewId = repoViewId;
     status = "opening";
     error = "";
     try {
-      current = await invoke<Document>("read_document", { repoPath, path });
-      renderedHtml = renderMarkdown(current.markdown);
+      repoCurrent = await invoke<Document>("read_document", { repoPath, path });
+      current = repoCurrent;
+      renderedHtml = renderMarkdown(repoCurrent.markdown);
       status = "ready";
       await tick();
       enhanceRenderedTables();
       await renderMermaid();
+    } catch (err) {
+      error = String(err);
+      status = "error";
+    }
+  }
+
+  async function openMarkdownFile(path: string, anchor = "") {
+    const existing = findFileView(path);
+    if (existing && fileDocuments.has(existing.id)) {
+      await activateView(existing.id);
+      if (anchor) {
+        await scrollToReaderAnchor(anchor);
+      }
+      return;
+    }
+
+    status = "opening";
+    error = "";
+    try {
+      const doc = await invoke<Document>("read_markdown_file", { path });
+      const view = createFileView(doc);
+      const nextFileDocuments = new Map(fileDocuments);
+      nextFileDocuments.set(view.id, doc);
+      fileDocuments = nextFileDocuments;
+      upsertOpenView(view);
+      activeViewId = view.id;
+      current = doc;
+      renderedHtml = renderMarkdown(doc.markdown);
+      status = "ready";
+      await tick();
+      enhanceRenderedTables();
+      await renderMermaid();
+      if (anchor) {
+        await scrollToReaderAnchor(anchor);
+      }
     } catch (err) {
       error = String(err);
       status = "error";
@@ -698,7 +947,7 @@
     return [
       "nav-row",
       node.path ? "doc" : "folder",
-      current?.path === node.path ? "active" : "",
+      activeView?.type === "repo" && current?.path === node.path ? "active" : "",
       !node.path && collapsedFolderIds.has(node.id) ? "collapsed" : "",
       node.kind
     ].join(" ");
@@ -776,6 +1025,11 @@
     }
 
     event.preventDefault();
+    if (target.type === "file") {
+      await openMarkdownFile(target.path, target.anchor);
+      return true;
+    }
+
     await openDocument(target.path);
     if (target.anchor) {
       await scrollToReaderAnchor(target.anchor);
@@ -784,12 +1038,21 @@
   }
 
   function resolveLinkedDocument(href: string): LinkTarget | null {
-    if (!snapshot || !current) {
+    if (!current) {
       return null;
     }
 
     const { pathPart, anchor } = splitHref(href);
     if (isExternalHref(pathPart)) {
+      return null;
+    }
+
+    if (activeView?.type === "file") {
+      const path = resolveStandaloneFilePath(pathPart);
+      return path ? { type: "file", path, anchor } : null;
+    }
+
+    if (!snapshot) {
       return null;
     }
 
@@ -799,7 +1062,7 @@
     }
 
     const doc = findDocByLinkPath(normalizedPath);
-    return doc ? { path: doc.path, anchor } : null;
+    return doc ? { type: "repo", path: doc.path, anchor } : null;
   }
 
   function splitHref(href: string) {
@@ -851,8 +1114,46 @@
     return normalizePathSegments(`${baseDir}${decodedPath}`);
   }
 
+  function resolveStandaloneFilePath(pathPart: string) {
+    if (!current) {
+      return null;
+    }
+
+    if (!pathPart || pathPart === ".") {
+      return current.path;
+    }
+
+    if (pathPart.toLowerCase().startsWith("file:")) {
+      try {
+        return normalizeAbsolutePathSegments(
+          normalizePathname(safeDecodeURIComponent(new URL(pathPart).pathname))
+        );
+      } catch {
+        return null;
+      }
+    }
+
+    const decodedPath = normalizePathname(safeDecodeURIComponent(pathPart));
+    if (decodedPath.startsWith("/")) {
+      return normalizeAbsolutePathSegments(decodedPath);
+    }
+
+    const baseDir = current.path.includes("/")
+      ? current.path.slice(0, current.path.lastIndexOf("/"))
+      : "";
+    return normalizeAbsolutePathSegments(`${baseDir}/${decodedPath}`);
+  }
+
   function normalizePathname(value: string) {
     return value.replace(/\\/g, "/");
+  }
+
+  function normalizeAbsolutePathSegments(value: string) {
+    const normalized = normalizePathSegments(value);
+    if (normalized === null) {
+      return null;
+    }
+    return value.startsWith("/") ? `/${normalized}` : normalized;
   }
 
   function normalizePathSegments(value: string) {
@@ -1175,10 +1476,61 @@
 
 <main
   class="app-shell"
-  class:sidebar-closed={!sidebarOpen}
+  class:sidebar-closed={!showSidebar}
   class:context-closed={!contextOpen}
 >
-  {#if sidebarOpen}
+  {#if isDragHovering}
+    <div class="drop-overlay" aria-hidden="true">
+      <div class="drop-target">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 3v5h5" />
+          <path d="M12 12v6" />
+          <path d="m9 15 3 3 3-3" />
+        </svg>
+        <span>{t.dropMarkdownFile}</span>
+      </div>
+    </div>
+  {/if}
+
+  <div
+    class="tabbar"
+    class:hidden={openViews.length <= 1}
+    role="tablist"
+    aria-label={t.openViews}
+  >
+    {#if openViews.length > 1}
+      {#each openViews as view (view.id)}
+        <div class="tab-item" class:active={view.id === activeViewId}>
+          <button
+            class="tab-main"
+            type="button"
+            role="tab"
+            aria-selected={view.id === activeViewId}
+            title={view.path}
+            on:click={() => activateView(view.id)}
+          >
+            <span class={`tab-dot ${view.type}`} aria-hidden="true"></span>
+            <span>{view.title}</span>
+          </button>
+          <button
+            class="tab-close"
+            type="button"
+            aria-label={`${t.closeView}: ${view.title}`}
+            title={t.closeView}
+            on:click={(event) => closeView(event, view.id)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7l10 10" />
+              <path d="M17 7L7 17" />
+            </svg>
+          </button>
+        </div>
+      {/each}
+    {/if}
+  </div>
+
+  {#if showSidebar}
   <aside class="sidebar">
     <div class="brand">
       <div>
@@ -1301,7 +1653,7 @@
   <section class="content">
     <header class="reader-head">
       <div class="reader-head-main">
-        {#if !sidebarOpen}
+        {#if !showSidebar && !activeViewIsFile}
           <button
             class="ghost icon-button"
             type="button"
@@ -1319,12 +1671,42 @@
           </button>
         {/if}
         <div class="reader-title">
-          <div class="eyebrow">{formatKind(current?.kind ?? "repo")}</div>
-          <h2>{current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle)}</h2>
-          <p>{current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected)}</p>
+          <div class="eyebrow">{formatKind(headerKind)}</div>
+          <h2>{headerTitle}</h2>
+          <p>{headerPath}</p>
         </div>
       </div>
       <div class="head-actions">
+        <button
+          class="ghost icon-button"
+          type="button"
+          disabled={repoBusy}
+          aria-label={t.openMarkdownFile}
+          title={t.openMarkdownFile}
+          on:click={browseMarkdownFile}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+            <path d="M14 3v5h5" />
+            <path d="M8 13h8" />
+            <path d="M8 17h5" />
+          </svg>
+        </button>
+        {#if activeViewIsFile || !snapshot}
+          <button
+            class="ghost icon-button"
+            type="button"
+            disabled={repoBusy}
+            aria-label={t.chooseNewRepo}
+            title={t.chooseNewRepo}
+            on:click={browseRepo}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
+              <path d="M3 9h18" />
+            </svg>
+          </button>
+        {/if}
         <span class={`status ${status}`}>{t.status[status]}</span>
         <div class="language-toggle" role="group" aria-label={t.language}>
           <button
@@ -1367,28 +1749,33 @@
       </div>
     </header>
 
-    {#if error}
-      <div class="error">{error}</div>
-    {/if}
+    <div class="reader-stage">
+      {#if error}
+        <div class="error">{error}</div>
+      {/if}
 
-    {#if snapshot}
-      <article class="reader">
-        {@html renderedHtml}
-      </article>
-    {:else}
-      <section class="repo-empty">
-        <div>
-          <div class="eyebrow">{t.memoryRepo}</div>
-          <h2>{t.noRepoTitle}</h2>
-          <p>{t.noRepoBody}</p>
-        </div>
-        <div class="repo-empty-actions">
-          <button class="repo-open" type="button" disabled={repoBusy} on:click={browseRepo}>
-            {t.chooseNewRepo}
-          </button>
-        </div>
-      </section>
-    {/if}
+      {#if current}
+        <article class="reader">
+          {@html renderedHtml}
+        </article>
+      {:else}
+        <section class="repo-empty">
+          <div>
+            <div class="eyebrow">{t.memoryRepo}</div>
+            <h2>{t.noRepoTitle}</h2>
+            <p>{t.noRepoBody}</p>
+          </div>
+          <div class="repo-empty-actions">
+            <button class="repo-open" type="button" disabled={repoBusy} on:click={browseRepo}>
+              {t.chooseNewRepo}
+            </button>
+            <button class="ghost" type="button" disabled={repoBusy} on:click={browseMarkdownFile}>
+              {t.openMarkdownFile}
+            </button>
+          </div>
+        </section>
+      {/if}
+    </div>
   </section>
 
   {#if contextOpen}
@@ -1413,29 +1800,31 @@
         </section>
       {/if}
 
-      <section>
-        <h3>{t.readChain}</h3>
-        {#if current?.read_chain.length}
-          <div class="chain">
-            {#each current.read_chain as item}
-              <button type="button" on:click={() => openDocument(item.path)}>
-                <span>{formatChainLabel(item.label)}</span>
-                <strong>{item.title}</strong>
-              </button>
-            {/each}
-          </div>
-        {:else}
-          <p class="muted">{t.noChain}</p>
-        {/if}
-      </section>
+      {#if !activeViewIsFile}
+        <section>
+          <h3>{t.readChain}</h3>
+          {#if current?.read_chain.length}
+            <div class="chain">
+              {#each current.read_chain as item}
+                <button type="button" on:click={() => openDocument(item.path)}>
+                  <span>{formatChainLabel(item.label)}</span>
+                  <strong>{item.title}</strong>
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <p class="muted">{t.noChain}</p>
+          {/if}
+        </section>
+      {/if}
 
       <section>
         <h3>{t.file}</h3>
         <dl>
           <dt>{t.kind}</dt>
-          <dd>{formatKind(current?.kind)}</dd>
+          <dd>{formatKind(activeViewIsFile ? "markdown_file" : current?.kind)}</dd>
           <dt>{t.path}</dt>
-          <dd>{current?.relative_path ?? "-"}</dd>
+          <dd>{activeViewIsFile ? current?.path ?? "-" : current?.relative_path ?? "-"}</dd>
           <dt>{t.mermaid}</dt>
           <dd>{current?.has_mermaid ? t.yes : t.no}</dd>
         </dl>

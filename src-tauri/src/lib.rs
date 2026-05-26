@@ -82,14 +82,36 @@ fn read_document(repo_path: String, path: String) -> Result<Document, String> {
     let root = normalize_repo_path(&repo_path)?;
     let requested = PathBuf::from(path);
     let requested = canonical_readable_child(&root, &requested)?;
-
-    let markdown = fs::read_to_string(&requested)
-        .map_err(|err| format!("读取文档失败：{} ({})", requested.display(), err))?;
     let relative_path = requested
         .strip_prefix(&root)
         .map_err(|_| "文档不在当前记忆库内".to_string())?
         .to_string_lossy()
         .to_string();
+    let read_chain = build_read_chain(&root, &relative_path);
+
+    read_markdown_document(&requested, relative_path, read_chain)
+}
+
+#[tauri::command]
+fn read_markdown_file(path: String) -> Result<Document, String> {
+    let requested = PathBuf::from(path.trim());
+    let requested = canonical_readable_markdown_file(&requested)?;
+    let relative_path = requested
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Markdown.md")
+        .to_string();
+
+    read_markdown_document(&requested, relative_path, Vec::new())
+}
+
+fn read_markdown_document(
+    requested: &Path,
+    relative_path: String,
+    read_chain: Vec<ChainItem>,
+) -> Result<Document, String> {
+    let markdown = fs::read_to_string(&requested)
+        .map_err(|err| format!("读取文档失败：{} ({})", requested.display(), err))?;
     let title = extract_title(&markdown).unwrap_or_else(|| fallback_title(&requested));
     let has_mermaid = markdown.contains("```mermaid");
 
@@ -101,7 +123,7 @@ fn read_document(repo_path: String, path: String) -> Result<Document, String> {
         kind: classify_doc(&relative_path),
         markdown,
         has_mermaid,
-        read_chain: build_read_chain(&root, &relative_path),
+        read_chain,
     })
 }
 
@@ -322,6 +344,23 @@ fn canonical_readable_child(root: &Path, requested: &Path) -> Result<PathBuf, St
     Ok(canonical)
 }
 
+fn canonical_readable_markdown_file(requested: &Path) -> Result<PathBuf, String> {
+    let canonical = requested
+        .canonicalize()
+        .map_err(|err| format!("Markdown 文件不存在或不可读：{} ({})", requested.display(), err))?;
+    if !canonical.is_file() {
+        return Err(format!("Markdown 路径不是文件：{}", canonical.display()));
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("md") {
+        return Err(format!("只能打开 Markdown 文件：{}", canonical.display()));
+    }
+    Ok(canonical)
+}
+
 fn extract_title(markdown: &str) -> Option<String> {
     for line in markdown.lines() {
         let trimmed = line.trim();
@@ -378,7 +417,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![scan_repo, read_document])
+        .invoke_handler(tauri::generate_handler![scan_repo, read_document, read_markdown_file])
         .run(tauri::generate_context!())
         .expect("error while running memView");
 }
@@ -450,6 +489,35 @@ mod tests {
         assert_eq!(doc.kind, "baseline");
         assert!(doc.markdown.contains("# "));
         assert_eq!(doc.read_chain.len(), 1);
+    }
+
+    #[test]
+    fn reads_standalone_markdown_file() {
+        let root = build_temp_dir("standalone");
+        fs::create_dir_all(&root).expect("standalone test dir should create");
+        let path = root.join("loose-note.md");
+        fs::write(&path, "# Loose Note\n\nStandalone markdown.\n")
+            .expect("standalone markdown should write");
+
+        let doc = read_markdown_file(path.to_string_lossy().to_string())
+            .expect("standalone markdown should read");
+
+        assert_eq!(doc.title, "Loose Note");
+        assert_eq!(doc.relative_path, "loose-note.md");
+        assert!(doc.read_chain.is_empty());
+    }
+
+    #[test]
+    fn rejects_standalone_non_markdown_file() {
+        let root = build_temp_dir("standalone-txt");
+        fs::create_dir_all(&root).expect("standalone test dir should create");
+        let path = root.join("note.txt");
+        fs::write(&path, "not markdown").expect("text file should write");
+
+        let err = read_markdown_file(path.to_string_lossy().to_string())
+            .expect_err("non-markdown file should be rejected");
+
+        assert!(err.contains("Markdown"));
     }
 
     fn build_test_repo() -> PathBuf {
