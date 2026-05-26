@@ -124,6 +124,12 @@
     fitShort: string;
     closeDiagram: string;
     enlargeDiagram: string;
+    findDocument: string;
+    findPlaceholder: string;
+    findPrevious: string;
+    findNext: string;
+    closeFind: string;
+    findNoMatches: string;
     status: Record<StatusKey, string>;
     kinds: Record<string, string>;
     chainLabels: Record<string, string>;
@@ -194,6 +200,12 @@
       fitShort: "适配",
       closeDiagram: "关闭图",
       enlargeDiagram: "放大图",
+      findDocument: "查找当前文档",
+      findPlaceholder: "查找当前文档",
+      findPrevious: "上一个匹配",
+      findNext: "下一个匹配",
+      closeFind: "关闭查找",
+      findNoMatches: "没有匹配",
       status: {
         idle: "待选择",
         loading: "加载中",
@@ -282,6 +294,12 @@
       fitShort: "Fit",
       closeDiagram: "Close diagram",
       enlargeDiagram: "Enlarge diagram",
+      findDocument: "Find in document",
+      findPlaceholder: "Find in current document",
+      findPrevious: "Previous match",
+      findNext: "Next match",
+      closeFind: "Close find",
+      findNoMatches: "No matches",
       status: {
         idle: "Choose Repo",
         loading: "Loading",
@@ -392,6 +410,11 @@
   let locale: Locale = getInitialLocale();
   let isDragHovering = false;
   let dragDropUnlisten: UnlistenFn | null = null;
+  let findOpen = false;
+  let findQuery = "";
+  let findMatchCount = 0;
+  let activeFindIndex = 0;
+  let findInput: HTMLInputElement | null = null;
 
   $: t = messages[locale];
   $: activeView = getOpenView(activeViewId);
@@ -550,9 +573,14 @@
     }
 
     renderedHtml = renderMarkdown(current.markdown);
+    await completeRenderedDocumentUpdate();
+  }
+
+  async function completeRenderedDocumentUpdate() {
     await tick();
     enhanceRenderedTables();
     await renderMermaid();
+    await refreshFindHighlights();
   }
 
   function formatKind(kind: string | null | undefined) {
@@ -670,9 +698,7 @@
       return;
     }
 
-    await tick();
-    enhanceRenderedTables();
-    await renderMermaid();
+    await completeRenderedDocumentUpdate();
   }
 
   async function browseRepo() {
@@ -857,9 +883,7 @@
       current = repoCurrent;
       renderedHtml = renderMarkdown(repoCurrent.markdown);
       status = "ready";
-      await tick();
-      enhanceRenderedTables();
-      await renderMermaid();
+      await completeRenderedDocumentUpdate();
     } catch (err) {
       error = String(err);
       status = "error";
@@ -889,9 +913,7 @@
       current = doc;
       renderedHtml = renderMarkdown(doc.markdown);
       status = "ready";
-      await tick();
-      enhanceRenderedTables();
-      await renderMermaid();
+      await completeRenderedDocumentUpdate();
       if (anchor) {
         await scrollToReaderAnchor(anchor);
       }
@@ -1345,6 +1367,172 @@
     ) ?? null;
   }
 
+  async function openFind() {
+    if (!current) {
+      return;
+    }
+
+    findOpen = true;
+    await tick();
+    findInput?.focus();
+    findInput?.select();
+    await refreshFindHighlights();
+  }
+
+  function closeFind() {
+    findOpen = false;
+    clearFindHighlights();
+    findMatchCount = 0;
+    activeFindIndex = 0;
+  }
+
+  function handleFindInput() {
+    activeFindIndex = 0;
+    void refreshFindHighlights({ scroll: true });
+  }
+
+  function formatFindStatus() {
+    if (!findQuery.trim()) {
+      return "";
+    }
+
+    if (!findMatchCount) {
+      return t.findNoMatches;
+    }
+
+    return `${activeFindIndex + 1} / ${findMatchCount}`;
+  }
+
+  async function refreshFindHighlights({ scroll = false } = {}) {
+    await tick();
+    const reader = document.querySelector<HTMLElement>(".reader");
+    clearFindHighlights(reader);
+
+    const needle = findQuery.trim();
+    if (!reader || !findOpen || !current || !needle) {
+      findMatchCount = 0;
+      activeFindIndex = 0;
+      return;
+    }
+
+    const matches = highlightReaderMatches(reader, needle);
+    findMatchCount = matches.length;
+    if (!matches.length) {
+      activeFindIndex = 0;
+      return;
+    }
+
+    activeFindIndex = Math.min(Math.max(activeFindIndex, 0), matches.length - 1);
+    setActiveFindMatch(matches, scroll);
+  }
+
+  function highlightReaderMatches(reader: HTMLElement, needle: string) {
+    const matches: HTMLElement[] = [];
+    const textNodes: Text[] = [];
+    const lowerNeedle = needle.toLowerCase();
+    const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(".mermaid, .diagram-zoom, mark.find-highlight")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+
+        const text = node.nodeValue ?? "";
+        return text.toLowerCase().includes(lowerNeedle)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      }
+    });
+
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode as Text);
+    }
+
+    for (const node of textNodes) {
+      const text = node.nodeValue ?? "";
+      const lowerText = text.toLowerCase();
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      let matchIndex = lowerText.indexOf(lowerNeedle);
+
+      while (matchIndex !== -1) {
+        if (matchIndex > cursor) {
+          fragment.append(document.createTextNode(text.slice(cursor, matchIndex)));
+        }
+
+        const mark = document.createElement("mark");
+        mark.className = "find-highlight";
+        mark.textContent = text.slice(matchIndex, matchIndex + needle.length);
+        fragment.append(mark);
+        matches.push(mark);
+
+        cursor = matchIndex + needle.length;
+        matchIndex = lowerText.indexOf(lowerNeedle, cursor);
+      }
+
+      if (cursor < text.length) {
+        fragment.append(document.createTextNode(text.slice(cursor)));
+      }
+
+      node.replaceWith(fragment);
+    }
+
+    return matches;
+  }
+
+  function clearFindHighlights(reader = document.querySelector<HTMLElement>(".reader")) {
+    if (!reader) {
+      return;
+    }
+
+    const highlights = Array.from(reader.querySelectorAll<HTMLElement>("mark.find-highlight"));
+    for (const highlight of highlights) {
+      const parent = highlight.parentNode;
+      if (!parent) {
+        continue;
+      }
+
+      while (highlight.firstChild) {
+        parent.insertBefore(highlight.firstChild, highlight);
+      }
+      parent.removeChild(highlight);
+      parent.normalize();
+    }
+  }
+
+  function setActiveFindMatch(matches = getFindMatches(), scroll = false) {
+    matches.forEach((match, index) => {
+      match.classList.toggle("active", index === activeFindIndex);
+    });
+
+    if (scroll) {
+      matches[activeFindIndex]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function getFindMatches() {
+    return Array.from(document.querySelectorAll<HTMLElement>(".reader mark.find-highlight"));
+  }
+
+  function moveFindMatch(delta: number) {
+    if (!findQuery.trim()) {
+      findInput?.focus();
+      return;
+    }
+
+    if (!findMatchCount) {
+      void refreshFindHighlights({ scroll: true });
+      return;
+    }
+
+    activeFindIndex = (activeFindIndex + delta + findMatchCount) % findMatchCount;
+    setActiveFindMatch(undefined, true);
+  }
+
+  function isFindShortcut(event: KeyboardEvent) {
+    return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "f";
+  }
+
   function safeDecodeURIComponent(value: string) {
     try {
       return decodeURIComponent(value);
@@ -1359,8 +1547,27 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape" && zoomedDiagramHtml) {
-      closeDiagram();
+    if (isFindShortcut(event) && current) {
+      event.preventDefault();
+      void openFind();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      if (zoomedDiagramHtml) {
+        closeDiagram();
+        return;
+      }
+
+      if (findOpen) {
+        closeFind();
+      }
+      return;
+    }
+
+    if (findOpen && event.key === "Enter" && event.target === findInput) {
+      event.preventDefault();
+      moveFindMatch(event.shiftKey ? -1 : 1);
     }
   }
 
@@ -1798,6 +2005,19 @@
         <button
           class="ghost icon-button"
           type="button"
+          disabled={!current}
+          aria-label={t.findDocument}
+          title={t.findDocument}
+          on:click={openFind}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6" />
+            <path d="m16 16 4 4" />
+          </svg>
+        </button>
+        <button
+          class="ghost icon-button"
+          type="button"
           disabled={updateBusy}
           aria-label={t.checkUpdate}
           title={updateMessage || t.checkUpdate}
@@ -1899,6 +2119,59 @@
     <div class="reader-stage">
       {#if error}
         <div class="error">{error}</div>
+      {/if}
+
+      {#if findOpen && current}
+        <div class="find-bar" role="search" aria-label={t.findDocument}>
+          <input
+            class="find-input"
+            bind:this={findInput}
+            bind:value={findQuery}
+            type="search"
+            placeholder={t.findPlaceholder}
+            aria-label={t.findDocument}
+            on:input={handleFindInput}
+          />
+          <span class="find-status" class:empty={Boolean(findQuery.trim() && !findMatchCount)}>
+            {formatFindStatus()}
+          </span>
+          <button
+            class="ghost icon-button"
+            type="button"
+            disabled={!findMatchCount}
+            aria-label={t.findPrevious}
+            title={t.findPrevious}
+            on:click={() => moveFindMatch(-1)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 14 5-5 5 5" />
+            </svg>
+          </button>
+          <button
+            class="ghost icon-button"
+            type="button"
+            disabled={!findMatchCount}
+            aria-label={t.findNext}
+            title={t.findNext}
+            on:click={() => moveFindMatch(1)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 10 5 5 5-5" />
+            </svg>
+          </button>
+          <button
+            class="ghost icon-button"
+            type="button"
+            aria-label={t.closeFind}
+            title={t.closeFind}
+            on:click={closeFind}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7l10 10" />
+              <path d="M17 7L7 17" />
+            </svg>
+          </button>
+        </div>
       {/if}
 
       {#if current}

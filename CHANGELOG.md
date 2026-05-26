@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.5
+
+- Added Find in the currently open Markdown document.
+- Added match highlighting, match count, previous/next navigation, and keyboard shortcuts.
+
 ## v0.2.4
 
 - Added GitHub Release based online updates through Tauri updater.
