@@ -1,7 +1,11 @@
-use serde::Serialize;
+use arboard::{Clipboard, ImageData};
+use base64::{engine::general_purpose, Engine as _};
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize)]
@@ -57,6 +61,17 @@ struct ChainItem {
     title: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardImage {
+    png_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClipboardSvg {
+    svg: String,
+}
+
 #[tauri::command]
 fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
     let root = normalize_repo_path(&repo_path)?;
@@ -103,6 +118,149 @@ fn read_markdown_file(path: String) -> Result<Document, String> {
         .to_string();
 
     read_markdown_document(&requested, relative_path, Vec::new())
+}
+
+#[tauri::command]
+fn copy_image_to_clipboard(image: ClipboardImage) -> Result<(), String> {
+    let bytes = general_purpose::STANDARD
+        .decode(image.png_base64.trim())
+        .map_err(|err| format!("图片数据解析失败：{}", err))?;
+
+    #[cfg(target_os = "macos")]
+    if let Err(err) = copy_png_to_macos_clipboard(&bytes) {
+        eprintln!("macOS clipboard fallback failed: {}", err);
+    } else {
+        return Ok(());
+    }
+
+    let decoded = image::load_from_memory(&bytes)
+        .map_err(|err| format!("图片解码失败：{}", err))?
+        .to_rgba8();
+    let width = decoded.width() as usize;
+    let height = decoded.height() as usize;
+    if width == 0 || height == 0 {
+        return Err("图片尺寸无效".to_string());
+    }
+
+    let mut clipboard =
+        Clipboard::new().map_err(|err| format!("打开系统剪贴板失败：{}", err))?;
+    clipboard
+        .set_image(ImageData {
+            width,
+            height,
+            bytes: Cow::Owned(decoded.into_raw()),
+        })
+        .map_err(|err| format!("写入系统剪贴板失败：{}", err))
+}
+
+#[tauri::command]
+fn copy_svg_to_clipboard(image: ClipboardSvg) -> Result<(), String> {
+    if image.svg.trim().is_empty() {
+        return Err("SVG 内容为空".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let png = render_svg_to_png_with_sips(&image.svg)?;
+        return copy_png_to_macos_clipboard(&png);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("当前平台暂不支持直接复制 SVG 图".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_png_to_macos_clipboard(bytes: &[u8]) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!(
+        "mem-view-diagram-{}-{}.png",
+        std::process::id(),
+        unix_timestamp_nanos()
+    ));
+    fs::write(&path, bytes).map_err(|err| format!("写入临时图片失败：{}", err))?;
+
+    let script = format!(
+        "set the clipboard to (read (POSIX file \"{}\") as TIFF picture)",
+        escape_applescript_string(&path.to_string_lossy())
+    );
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|err| {
+            let _ = fs::remove_file(&path);
+            format!("调用系统剪贴板失败：{}", err)
+        })?;
+    let _ = fs::remove_file(&path);
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "系统剪贴板写入失败：{}{}",
+        stderr.trim(),
+        stdout.trim()
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn render_svg_to_png_with_sips(svg: &str) -> Result<Vec<u8>, String> {
+    let stem = format!(
+        "mem-view-diagram-{}-{}",
+        std::process::id(),
+        unix_timestamp_nanos()
+    );
+    let svg_path = std::env::temp_dir().join(format!("{}.svg", stem));
+    let png_path = std::env::temp_dir().join(format!("{}.png", stem));
+    fs::write(&svg_path, svg).map_err(|err| format!("写入临时 SVG 失败：{}", err))?;
+
+    let output = Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("png")
+        .arg(&svg_path)
+        .arg("--out")
+        .arg(&png_path)
+        .output()
+        .map_err(|err| {
+            let _ = fs::remove_file(&svg_path);
+            format!("调用系统 SVG 转图片失败：{}", err)
+        })?;
+    let _ = fs::remove_file(&svg_path);
+
+    if !output.status.success() {
+        let _ = fs::remove_file(&png_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "SVG 转图片失败：{}{}",
+            stderr.trim(),
+            stdout.trim()
+        ));
+    }
+
+    let png = fs::read(&png_path).map_err(|err| format!("读取临时图片失败：{}", err))?;
+    let _ = fs::remove_file(&png_path);
+    Ok(png)
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn unix_timestamp_nanos() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }
 
 fn read_markdown_document(
@@ -425,7 +583,13 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_repo, read_document, read_markdown_file])
+        .invoke_handler(tauri::generate_handler![
+            scan_repo,
+            read_document,
+            read_markdown_file,
+            copy_svg_to_clipboard,
+            copy_image_to_clipboard
+        ])
         .run(tauri::generate_context!())
         .expect("error while running memView");
 }

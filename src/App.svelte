@@ -57,6 +57,7 @@
   type SvgBox = { x: number; y: number; width: number; height: number };
   type MarkdownRenderEnv = { headingCounts: Map<string, number> };
   type ViewType = "repo" | "file";
+  type CopyDiagramState = "idle" | "copying" | "copied" | "error";
   type OpenView = {
     id: string;
     type: ViewType;
@@ -130,6 +131,10 @@
     fitShort: string;
     closeDiagram: string;
     enlargeDiagram: string;
+    copyDiagram: string;
+    copyingDiagram: string;
+    copiedDiagram: string;
+    copyDiagramFailed: string;
     findDocument: string;
     findPlaceholder: string;
     findPrevious: string;
@@ -206,6 +211,10 @@
       fitShort: "适配",
       closeDiagram: "关闭图",
       enlargeDiagram: "放大图",
+      copyDiagram: "复制图片",
+      copyingDiagram: "复制中",
+      copiedDiagram: "已复制",
+      copyDiagramFailed: "复制失败",
       findDocument: "查找当前文档",
       findPlaceholder: "查找当前文档",
       findPrevious: "上一个匹配",
@@ -300,6 +309,10 @@
       fitShort: "Fit",
       closeDiagram: "Close diagram",
       enlargeDiagram: "Enlarge diagram",
+      copyDiagram: "Copy image",
+      copyingDiagram: "Copying",
+      copiedDiagram: "Copied",
+      copyDiagramFailed: "Copy failed",
       findDocument: "Find in document",
       findPlaceholder: "Find in current document",
       findPrevious: "Previous match",
@@ -378,7 +391,10 @@
   mermaid.initialize({
     startOnLoad: false,
     theme: "neutral",
-    securityLevel: "strict"
+    securityLevel: "strict",
+    flowchart: {
+      htmlLabels: false
+    }
   });
 
   let snapshot: RepoSnapshot | null = null;
@@ -406,6 +422,9 @@
   let zoomedDiagramTitle = "";
   let zoomLevel = 1;
   let diagramViewport: HTMLDivElement | null = null;
+  let copyDiagramState: CopyDiagramState = "idle";
+  let copyDiagramErrorMessage = "";
+  let copyDiagramResetTimer: number | null = null;
   let panX = 32;
   let panY = 32;
   let isPanning = false;
@@ -441,6 +460,8 @@
     ? current?.path ?? activeView?.path ?? t.noRepoSelected
     : current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected);
   $: findStatus = formatFindStatus();
+  $: copyDiagramButtonText = getCopyDiagramStateText(copyDiagramState);
+  $: copyDiagramButtonTitle = getCopyDiagramButtonTitle();
 
   onMount(() => {
     document.documentElement.lang = locale;
@@ -457,6 +478,9 @@
     document.removeEventListener("click", handleDocumentClick);
     window.removeEventListener("resize", handleWindowResize);
     dragDropUnlisten?.();
+    if (copyDiagramResetTimer !== null) {
+      window.clearTimeout(copyDiagramResetTimer);
+    }
   });
 
   async function setupDragDrop() {
@@ -956,7 +980,10 @@
       /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
       (_, encoded: string) => `
         <figure class="diagram-frame">
-          <button class="diagram-zoom" type="button" aria-label="${t.enlargeDiagram}" title="${t.enlargeDiagram}"></button>
+          <div class="diagram-actions">
+            <button class="diagram-copy" type="button" aria-label="${t.copyDiagram}" title="${t.copyDiagram}"></button>
+            <button class="diagram-zoom" type="button" aria-label="${t.enlargeDiagram}" title="${t.enlargeDiagram}"></button>
+          </div>
           <div class="mermaid">${decodeHtml(encoded)}</div>
         </figure>
       `
@@ -1153,22 +1180,38 @@
       return;
     }
 
+    const copyButton = target.closest<HTMLButtonElement>(".diagram-copy");
+    if (copyButton && copyButton.closest(".reader")) {
+      const svg = getFrameDiagramSvg(copyButton);
+      if (!svg) {
+        return;
+      }
+
+      await copyInlineDiagram(svg, copyButton);
+      return;
+    }
+
     const zoomButton = target.closest<HTMLButtonElement>(".diagram-zoom");
     if (!zoomButton || !zoomButton.closest(".reader")) {
       return;
     }
 
-    const frame = zoomButton.closest<HTMLElement>(".diagram-frame");
-    const svg = frame?.querySelector<SVGElement>(".mermaid svg");
+    const svg = getFrameDiagramSvg(zoomButton);
     if (!svg) {
       return;
     }
 
     zoomedDiagramHtml = serializeDiagramSvg(svg);
     zoomedDiagramTitle = current?.title ?? t.mermaidDiagram;
+    setCopyDiagramState("idle");
     resetDiagramView();
     await tick();
     fitDiagramToViewport();
+  }
+
+  function getFrameDiagramSvg(button: HTMLButtonElement) {
+    const frame = button.closest<HTMLElement>(".diagram-frame");
+    return frame?.querySelector<SVGSVGElement>(".mermaid svg") ?? null;
   }
 
   async function handleReaderLinkClick(event: MouseEvent, link: HTMLAnchorElement) {
@@ -1460,7 +1503,7 @@
     const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
-        if (!parent || parent.closest(".mermaid, .diagram-zoom, mark.find-highlight")) {
+        if (!parent || parent.closest(".mermaid, .diagram-actions, mark.find-highlight")) {
           return NodeFilter.FILTER_REJECT;
         }
 
@@ -1571,6 +1614,219 @@
   function closeDiagram() {
     zoomedDiagramHtml = "";
     isPanning = false;
+    setCopyDiagramState("idle");
+  }
+
+  function getCopyDiagramStateText(state: CopyDiagramState) {
+    if (state === "copying") {
+      return t.copyingDiagram;
+    }
+    if (state === "copied") {
+      return t.copiedDiagram;
+    }
+    if (state === "error") {
+      return t.copyDiagramFailed;
+    }
+    return t.copyDiagram;
+  }
+
+  function setCopyDiagramState(state: CopyDiagramState, message = "") {
+    if (copyDiagramResetTimer !== null) {
+      window.clearTimeout(copyDiagramResetTimer);
+      copyDiagramResetTimer = null;
+    }
+
+    copyDiagramErrorMessage = state === "error" ? message : "";
+    copyDiagramState = state;
+    if (state === "copied" || state === "error") {
+      copyDiagramResetTimer = window.setTimeout(() => {
+        copyDiagramState = "idle";
+        copyDiagramErrorMessage = "";
+        copyDiagramResetTimer = null;
+      }, 1800);
+    }
+  }
+
+  function getCopyDiagramButtonTitle() {
+    return copyDiagramErrorMessage
+      ? `${t.copyDiagramFailed}: ${copyDiagramErrorMessage}`
+      : copyDiagramButtonText;
+  }
+
+  async function copyInlineDiagram(svg: SVGSVGElement, button: HTMLButtonElement) {
+    if (button.disabled) {
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      await copyDiagramSvgToClipboard(svg);
+      setInlineDiagramCopyState(button, "copied");
+    } catch (err) {
+      console.warn("Copy diagram failed", err);
+      setInlineDiagramCopyState(button, "error", getErrorMessage(err));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function setInlineDiagramCopyState(
+    button: HTMLButtonElement,
+    state: Extract<CopyDiagramState, "copied" | "error">,
+    message = ""
+  ) {
+    button.classList.remove("copied", "error");
+    button.classList.add(state);
+    const label = message ? `${getCopyDiagramStateText(state)}: ${message}` : getCopyDiagramStateText(state);
+    button.setAttribute("aria-label", label);
+    button.title = label;
+
+    window.setTimeout(() => {
+      if (!button.isConnected) {
+        return;
+      }
+      button.classList.remove("copied", "error");
+      button.setAttribute("aria-label", t.copyDiagram);
+      button.title = t.copyDiagram;
+    }, 1800);
+  }
+
+  async function copyZoomedDiagram() {
+    if (copyDiagramState === "copying") {
+      return;
+    }
+
+    const svg = diagramViewport?.querySelector<SVGSVGElement>(".diagram-canvas svg");
+    if (!svg) {
+      setCopyDiagramState("error", "Diagram SVG not found");
+      return;
+    }
+
+    setCopyDiagramState("copying");
+    try {
+      await copyDiagramSvgToClipboard(svg);
+      setCopyDiagramState("copied");
+    } catch (err) {
+      console.warn("Copy diagram failed", err);
+      setCopyDiagramState("error", getErrorMessage(err));
+    }
+  }
+
+  function getErrorMessage(err: unknown) {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  async function copyDiagramSvgToClipboard(svg: SVGSVGElement) {
+    const svgMarkup = serializeDiagramSvg(svg);
+    const raster = await rasterizeDiagramSvgMarkup(svgMarkup, svg);
+    const copiedInBrowser = await copyPngBlobWithBrowserClipboard(raster.pngBlob);
+    if (copiedInBrowser) {
+      return;
+    }
+
+    try {
+      await invoke<void>("copy_image_to_clipboard", {
+        image: {
+          pngBase64: raster.pngBase64
+        }
+      });
+      return;
+    } catch (pngErr) {
+      console.warn("Native PNG clipboard path failed", pngErr);
+      try {
+        await invoke<void>("copy_svg_to_clipboard", {
+          image: {
+            svg: svgMarkup
+          }
+        });
+      } catch (svgErr) {
+        throw new Error(`PNG copy failed: ${getErrorMessage(pngErr)}; SVG fallback failed: ${getErrorMessage(svgErr)}`);
+      }
+    }
+  }
+
+  async function rasterizeDiagramSvgMarkup(svgMarkup: string, svg: SVGSVGElement) {
+    const image = await loadSerializedSvgImage(svgMarkup);
+    const fallbackSize = getSvgSize(svg);
+    const width = Math.max(1, Math.ceil(image.naturalWidth || fallbackSize.width));
+    const height = Math.max(1, Math.ceil(image.naturalHeight || fallbackSize.height));
+    const maxPixels = 24000000;
+    if (width * height > maxPixels) {
+      throw new Error(`Diagram image is too large to copy: ${width}x${height}`);
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas is not available");
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const pngBlob = await canvasToPngBlob(canvas);
+
+    return {
+      width,
+      height,
+      pngBase64: bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer())),
+      pngBlob
+    };
+  }
+
+  function loadSerializedSvgImage(svgMarkup: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      const url = `data:image/svg+xml;base64,${bytesToBase64(new TextEncoder().encode(svgMarkup))}`;
+      image.onload = () => {
+        resolve(image);
+      };
+      image.onerror = () => {
+        reject(new Error("Failed to load diagram image"));
+      };
+      image.src = url;
+    });
+  }
+
+  function canvasToPngBlob(canvas: HTMLCanvasElement) {
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error("Failed to encode diagram image"));
+      }, "image/png");
+    });
+  }
+
+  function bytesToBase64(bytes: Uint8Array | Uint8ClampedArray) {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  async function copyPngBlobWithBrowserClipboard(blob: Blob) {
+    if (
+      typeof ClipboardItem === "undefined" ||
+      !navigator.clipboard ||
+      typeof navigator.clipboard.write !== "function"
+    ) {
+      return false;
+    }
+
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      return true;
+    } catch (err) {
+      console.warn("Browser image clipboard fallback failed", err);
+      return false;
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -1687,6 +1943,9 @@
 
   function serializeDiagramSvg(svg: SVGSVGElement) {
     const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    inlineSvgComputedStyles(svg, clone);
     const bounds = getSvgContentBox(svg);
     if (bounds) {
       clone.setAttribute(
@@ -1701,10 +1960,77 @@
       clone.setAttribute("height", String(Math.ceil(size.height)));
     }
     clone.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    addSvgWhiteBackground(clone, size);
     clone.style.display = "block";
     clone.style.maxWidth = "none";
     clone.style.background = "#ffffff";
     return clone.outerHTML;
+  }
+
+  function inlineSvgComputedStyles(source: SVGElement, clone: SVGElement) {
+    const sourceElements = [source, ...source.querySelectorAll<SVGElement>("*")];
+    const cloneElements = [clone, ...clone.querySelectorAll<SVGElement>("*")];
+    const properties = [
+      "alignment-baseline",
+      "color",
+      "dominant-baseline",
+      "fill",
+      "fill-opacity",
+      "font-family",
+      "font-size",
+      "font-style",
+      "font-weight",
+      "letter-spacing",
+      "line-height",
+      "marker-end",
+      "marker-mid",
+      "marker-start",
+      "opacity",
+      "paint-order",
+      "stroke",
+      "stroke-dasharray",
+      "stroke-linecap",
+      "stroke-linejoin",
+      "stroke-opacity",
+      "stroke-width",
+      "text-anchor",
+      "white-space"
+    ];
+
+    for (let index = 0; index < sourceElements.length; index += 1) {
+      const sourceElement = sourceElements[index];
+      const cloneElement = cloneElements[index];
+      if (!sourceElement || !cloneElement) {
+        continue;
+      }
+
+      const computed = getComputedStyle(sourceElement);
+      for (const property of properties) {
+        const value = computed.getPropertyValue(property);
+        if (value) {
+          cloneElement.style.setProperty(property, value);
+        }
+      }
+    }
+  }
+
+  function addSvgWhiteBackground(svg: SVGSVGElement, size: SvgBox | { width: number; height: number }) {
+    const viewBox = svg.viewBox?.baseVal;
+    const x = "x" in size ? size.x : viewBox?.x ?? 0;
+    const y = "y" in size ? size.y : viewBox?.y ?? 0;
+    const width = size.width;
+    const height = size.height;
+    if (!width || !height) {
+      return;
+    }
+
+    const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    background.setAttribute("x", String(x));
+    background.setAttribute("y", String(y));
+    background.setAttribute("width", String(width));
+    background.setAttribute("height", String(height));
+    background.setAttribute("fill", "#ffffff");
+    svg.insertBefore(background, svg.firstChild);
   }
 
   function getSvgContentBox(svg: SVGSVGElement): SvgBox | null {
@@ -2296,6 +2622,17 @@
           </button>
           <button type="button" on:click={() => adjustZoom(0.2)} aria-label={t.zoomIn} title={t.zoomIn}>
             +
+          </button>
+          <button
+            type="button"
+            class:copied={copyDiagramState === "copied"}
+            class:error={copyDiagramState === "error"}
+            on:click={copyZoomedDiagram}
+            disabled={copyDiagramState === "copying"}
+            aria-label={copyDiagramButtonText}
+            title={copyDiagramButtonTitle}
+          >
+            {copyDiagramButtonText}
           </button>
           <button type="button" on:click={closeDiagram} aria-label={t.closeDiagram} title={t.closeDiagram}>
             x

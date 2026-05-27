@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.8
+
+- Added Mermaid diagram image copying to the system clipboard.
+- Added copy controls in both inline diagrams and the enlarged diagram viewer.
+- Improved Mermaid export rendering with white backgrounds and preserved text/style output.
+
 ## v0.2.7
 
 - Keep the current Markdown document open when refreshing the repository index.

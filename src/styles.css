@@ -848,11 +848,19 @@ h1 {
   margin: 16px 0;
 }
 
-.reader .diagram-zoom {
+.reader .diagram-actions {
   position: absolute;
   top: 8px;
   right: 8px;
   z-index: 1;
+  display: flex;
+  gap: 6px;
+  opacity: 0.78;
+  transition: opacity 120ms ease;
+}
+
+.reader .diagram-copy,
+.reader .diagram-zoom {
   display: grid;
   width: 30px;
   height: 30px;
@@ -861,16 +869,20 @@ h1 {
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.92);
   color: #24313d;
-  opacity: 0.78;
   transition:
-    opacity 120ms ease,
     background 120ms ease,
     border-color 120ms ease;
 }
 
-.reader .diagram-frame:hover .diagram-zoom,
-.reader .diagram-zoom:focus-visible {
+.reader .diagram-frame:hover .diagram-actions,
+.reader .diagram-actions:focus-within {
   opacity: 1;
+}
+
+.reader .diagram-copy::before {
+  content: "⎘";
+  font-size: 16px;
+  line-height: 1;
 }
 
 .reader .diagram-zoom::before {
@@ -879,9 +891,30 @@ h1 {
   line-height: 1;
 }
 
+.reader .diagram-copy:hover,
 .reader .diagram-zoom:hover {
   border-color: #9daaa5;
   background: #ffffff;
+}
+
+.reader .diagram-copy.copied {
+  border-color: #8fc2aa;
+  background: #eef8f2;
+  color: #0f6b47;
+}
+
+.reader .diagram-copy.copied::before {
+  content: "✓";
+}
+
+.reader .diagram-copy.error {
+  border-color: #d5a3a3;
+  background: #fff1f1;
+  color: #9b1c1c;
+}
+
+.reader .diagram-copy.error::before {
+  content: "!";
 }
 
 .reader .mermaid {
@@ -944,6 +977,18 @@ h1 {
 .diagram-tools button:hover {
   border-color: #aeb8b3;
   background: #f5f7f4;
+}
+
+.diagram-tools button.copied {
+  border-color: #8fc2aa;
+  background: #eef8f2;
+  color: #0f6b47;
+}
+
+.diagram-tools button.error {
+  border-color: #d5a3a3;
+  background: #fff1f1;
+  color: #9b1c1c;
 }
 
 .diagram-modal-body {
