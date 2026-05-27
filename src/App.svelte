@@ -81,6 +81,10 @@
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
+  type CheckUpdateOptions = {
+    notifyNoUpdate?: boolean;
+    notifyError?: boolean;
+  };
   type ToastTone = "info" | "error";
   type MessagePack = {
     docs: string;
@@ -527,6 +531,7 @@
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
     void setupDragDrop();
+    void checkForUpdates({ notifyNoUpdate: false, notifyError: false });
     if (repoPath) {
       void loadRepo(repoPath);
     }
@@ -832,7 +837,8 @@
     await openMarkdownFile(selected);
   }
 
-  async function checkForUpdates() {
+  async function checkForUpdates(options: CheckUpdateOptions = {}) {
+    const { notifyNoUpdate = true, notifyError = true } = options;
     if (updateState !== "idle" || updateDialogOpen) {
       return;
     }
@@ -845,13 +851,19 @@
     try {
       const update = await check({ timeout: 30000 });
       if (!update) {
-        showUpdateToast(t.noUpdate);
+        if (notifyNoUpdate) {
+          showUpdateToast(t.noUpdate);
+        }
         return;
       }
 
       openUpdateDialog(update);
     } catch (err) {
-      showUpdateToast(`${t.updateFailed}: ${getErrorMessage(err)}`, "error");
+      if (notifyError) {
+        showUpdateToast(`${t.updateFailed}: ${getErrorMessage(err)}`, "error");
+      } else {
+        console.warn("Startup update check failed", err);
+      }
     } finally {
       if (updateState === "checking") {
         updateState = "idle";
@@ -2495,7 +2507,7 @@
         aria-busy={updateState === "checking"}
         aria-label={t.checkUpdate}
         title={updateState === "checking" ? t.checkingUpdate : t.checkUpdate}
-        on:click={checkForUpdates}
+        on:click={() => checkForUpdates()}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 11a8 8 0 0 0-14.5-4.7L3 9" />

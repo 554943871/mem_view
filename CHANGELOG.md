@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.11
+
+- Restored automatic update checks when the app starts.
+- Kept startup update checks quiet unless a new version is available.
+
 ## v0.2.10
 
 - Added browser-style back and forward navigation controls in the titlebar.
