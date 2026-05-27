@@ -1,6 +1,6 @@
 [package]
 name = "mem-view"
-version = "0.2.9"
+version = "0.2.10"
 description = "A read-only local viewer for mem repositories"
 authors = ["god"]
 edition = "2021"

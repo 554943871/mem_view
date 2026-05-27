@@ -464,6 +464,12 @@ h1 {
   gap: 8px;
 }
 
+.toolbar-history {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .toolbar-drag-region {
   align-self: stretch;
   min-width: 32px;
@@ -487,6 +493,20 @@ h1 {
 
 .app-toolbar .icon-button {
   width: 32px;
+}
+
+.app-toolbar .toolbar-history-button {
+  width: 28px;
+  color: #52606d;
+}
+
+.app-toolbar .toolbar-history-button:disabled {
+  color: #aeb6b0;
+  opacity: 1;
+}
+
+.app-toolbar .toolbar-history-button:disabled:hover {
+  color: #aeb6b0;
 }
 
 .app-toolbar .language-toggle {

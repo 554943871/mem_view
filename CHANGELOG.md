@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.10
+
+- Added browser-style back and forward navigation controls in the titlebar.
+- Disabled history arrows when no previous or next view is available.
+- Fixed the sidebar selected-document highlight after following links between files.
+
 ## v0.2.9
 
 - Moved global toolbar actions into the macOS titlebar row.

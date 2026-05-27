@@ -70,6 +70,13 @@
   type OpenDocumentOptions = {
     restoreScrollTop?: number;
   };
+  type NavigationEntry = {
+    type: ViewType;
+    path: string;
+    title: string;
+    repoPath: string;
+    scrollTop: number;
+  };
   type LinkTarget = { type: ViewType; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
@@ -125,6 +132,9 @@
     hideSidebar: string;
     showDetails: string;
     hideDetails: string;
+    navigationHistory: string;
+    navigateBack: string;
+    navigateForward: string;
     file: string;
     kind: string;
     path: string;
@@ -214,6 +224,9 @@
       hideSidebar: "收起左侧栏",
       showDetails: "展开信息栏",
       hideDetails: "收起信息栏",
+      navigationHistory: "导航历史",
+      navigateBack: "后退",
+      navigateForward: "前进",
       file: "文件",
       kind: "类型",
       path: "路径",
@@ -321,6 +334,9 @@
       hideSidebar: "Hide sidebar",
       showDetails: "Show details",
       hideDetails: "Hide details",
+      navigationHistory: "Navigation history",
+      navigateBack: "Back",
+      navigateForward: "Forward",
       file: "File",
       kind: "Kind",
       path: "Path",
@@ -448,6 +464,9 @@
   let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
   let activeViewId = openViews[0]?.id ?? "";
   let fileDocuments = new Map<string, Document>();
+  let navigationHistory: NavigationEntry[] = [];
+  let navigationIndex = -1;
+  let isRestoringNavigation = false;
   let collapsedFolderIds = new Set<string>();
   let recentRepoPaths = getInitialRecentRepoPaths(repoPath);
   let selectedRecentRepoPath = recentRepoPaths[0] ?? repoPath;
@@ -479,6 +498,9 @@
   $: t = messages[locale];
   $: activeView = getOpenView(activeViewId);
   $: activeViewIsFile = activeView?.type === "file";
+  $: activeRepoDocumentPath = activeView?.type === "repo" ? current?.path ?? "" : "";
+  $: canNavigateBack = navigationIndex > 0;
+  $: canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
   $: showSidebar = sidebarOpen && !activeViewIsFile;
   $: repoBusy = status === "indexing" || status === "opening";
   $: updateBusy = updateState !== "idle";
@@ -721,9 +743,13 @@
       return;
     }
 
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
     activeViewId = id;
     error = "";
     await renderActiveView();
+    recordNavigationEntry();
   }
 
   function closeView(event: MouseEvent, id: string) {
@@ -737,6 +763,9 @@
       return;
     }
 
+    if (activeViewId === id) {
+      updateCurrentHistoryScroll();
+    }
     const closingView = openViews[closingIndex];
     const nextViews = openViews.filter((view) => view.id !== id);
     if (closingView.type === "file") {
@@ -752,7 +781,7 @@
 
     const nextView = nextViews[Math.min(closingIndex, nextViews.length - 1)] ?? null;
     activeViewId = nextView?.id ?? "";
-    void renderActiveView();
+    void renderActiveView().then(() => recordNavigationEntry());
   }
 
   async function renderActiveView() {
@@ -986,6 +1015,9 @@
       return;
     }
 
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
     const preservedRelativePath = options.preserveCurrentDocument ? repoCurrent?.relative_path : "";
     const preservedScrollTop = options.preserveCurrentDocument ? getReaderScrollTop() : undefined;
     const preservedCollapsedFolderIds = options.preserveCurrentDocument
@@ -1036,6 +1068,9 @@
       return;
     }
 
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
     upsertOpenView(createRepoView(repoPath));
     activeViewId = repoViewId;
     status = "opening";
@@ -1052,18 +1087,24 @@
           reader.scrollTop = options.restoreScrollTop;
         }
       }
+      recordNavigationEntry();
     } catch (err) {
       error = String(err);
       status = "error";
     }
   }
 
-  async function openMarkdownFile(path: string, anchor = "") {
+  async function openMarkdownFile(path: string, anchor = "", options: OpenDocumentOptions = {}) {
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
     const existing = findFileView(path);
     if (existing && fileDocuments.has(existing.id)) {
       await activateView(existing.id);
       if (anchor) {
         await scrollToReaderAnchor(anchor);
+      } else if (options.restoreScrollTop !== undefined) {
+        restoreReaderScrollTop(options.restoreScrollTop);
       }
       return;
     }
@@ -1084,11 +1125,117 @@
       await completeRenderedDocumentUpdate();
       if (anchor) {
         await scrollToReaderAnchor(anchor);
+      } else if (options.restoreScrollTop !== undefined) {
+        restoreReaderScrollTop(options.restoreScrollTop);
       }
+      recordNavigationEntry();
     } catch (err) {
       error = String(err);
       status = "error";
     }
+  }
+
+  function restoreReaderScrollTop(scrollTop: number) {
+    const reader = document.querySelector<HTMLElement>(".reader");
+    if (reader) {
+      reader.scrollTop = scrollTop;
+    }
+  }
+
+  function createNavigationEntry(scrollTop = getReaderScrollTop()): NavigationEntry | null {
+    if (!current) {
+      return null;
+    }
+
+    const view = getOpenView(activeViewId);
+    const isFileView = view?.type === "file";
+    return {
+      type: isFileView ? "file" : "repo",
+      path: current.path,
+      title: current.title,
+      repoPath: isFileView ? "" : repoPath,
+      scrollTop
+    };
+  }
+
+  function navigationEntryKey(entry: NavigationEntry) {
+    return [
+      entry.type,
+      normalizePathname(entry.repoPath),
+      normalizePathname(entry.path)
+    ].join(":");
+  }
+
+  function updateCurrentHistoryScroll() {
+    if (navigationIndex < 0 || navigationIndex >= navigationHistory.length) {
+      return;
+    }
+
+    const entry = createNavigationEntry();
+    if (!entry || navigationEntryKey(entry) !== navigationEntryKey(navigationHistory[navigationIndex])) {
+      return;
+    }
+
+    navigationHistory = navigationHistory.map((item, index) =>
+      index === navigationIndex ? { ...item, scrollTop: entry.scrollTop } : item
+    );
+  }
+
+  function recordNavigationEntry() {
+    if (isRestoringNavigation) {
+      return;
+    }
+
+    const entry = createNavigationEntry();
+    if (!entry) {
+      return;
+    }
+
+    const entryKey = navigationEntryKey(entry);
+    const currentEntry = navigationHistory[navigationIndex];
+    if (currentEntry && navigationEntryKey(currentEntry) === entryKey) {
+      navigationHistory = navigationHistory.map((item, index) =>
+        index === navigationIndex ? entry : item
+      );
+      return;
+    }
+
+    const nextHistory = navigationHistory.slice(0, navigationIndex + 1);
+    navigationHistory = [...nextHistory, entry];
+    navigationIndex = navigationHistory.length - 1;
+  }
+
+  async function navigateHistory(delta: -1 | 1) {
+    if ((delta < 0 && !canNavigateBack) || (delta > 0 && !canNavigateForward)) {
+      return;
+    }
+
+    updateCurrentHistoryScroll();
+    const targetIndex = navigationIndex + delta;
+    const target = navigationHistory[targetIndex];
+    if (!target) {
+      return;
+    }
+
+    navigationIndex = targetIndex;
+    isRestoringNavigation = true;
+    try {
+      await restoreNavigationEntry(target);
+    } finally {
+      isRestoringNavigation = false;
+    }
+  }
+
+  async function restoreNavigationEntry(entry: NavigationEntry) {
+    if (entry.type === "file") {
+      await openMarkdownFile(entry.path, "", { restoreScrollTop: entry.scrollTop });
+      return;
+    }
+
+    if (entry.repoPath && normalizePathname(repoPath) !== normalizePathname(entry.repoPath)) {
+      await loadRepo(entry.repoPath);
+    }
+    await openDocument(entry.path, { restoreScrollTop: entry.scrollTop });
   }
 
   function renderMarkdown(source: string) {
@@ -1254,14 +1401,18 @@
     return nodes.map((node) => ({ ...node, depth: 0 }));
   }
 
-  function nodeClass(node: FlatNode) {
+  function nodeClass(node: FlatNode, activePath: string) {
     return [
       "nav-row",
       node.path ? "doc" : "folder",
-      activeView?.type === "repo" && current?.path === node.path ? "active" : "",
+      isSamePath(activePath, node.path) ? "active" : "",
       !node.path && collapsedFolderIds.has(node.id) ? "collapsed" : "",
       node.kind
     ].join(" ");
+  }
+
+  function isSamePath(pathA: string | null | undefined, pathB: string | null | undefined) {
+    return Boolean(pathA && pathB && normalizePathname(pathA) === normalizePathname(pathB));
   }
 
   function toggleFolder(node: FlatNode) {
@@ -2307,6 +2458,32 @@
           {/if}
         </svg>
       </button>
+      <div class="toolbar-history" role="group" aria-label={t.navigationHistory}>
+        <button
+          class="ghost icon-button toolbar-history-button"
+          type="button"
+          disabled={!canNavigateBack}
+          aria-label={t.navigateBack}
+          title={t.navigateBack}
+          on:click={() => navigateHistory(-1)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+        </button>
+        <button
+          class="ghost icon-button toolbar-history-button"
+          type="button"
+          disabled={!canNavigateForward}
+          aria-label={t.navigateForward}
+          title={t.navigateForward}
+          on:click={() => navigateHistory(1)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="toolbar-drag-region"></div>
     <div class="toolbar-actions">
@@ -2511,7 +2688,7 @@
       {#if visibleNodes.length}
         {#each visibleNodes as node (node.id)}
           <button
-            class={nodeClass(node)}
+            class={nodeClass(node, activeRepoDocumentPath)}
             style={`--depth: ${node.depth}`}
             disabled={!node.path && !node.children.length}
             type="button"
