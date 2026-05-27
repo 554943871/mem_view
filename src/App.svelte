@@ -4,7 +4,7 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
+  import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
   import MarkdownIt from "markdown-it";
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
@@ -74,6 +74,7 @@
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
+  type ToastTone = "info" | "error";
   type MessagePack = {
     docs: string;
     diagrams: string;
@@ -92,6 +93,15 @@
     noUpdate: string;
     updateReady: string;
     updateFailed: string;
+    updateVersion: string;
+    updateDate: string;
+    updateReleaseNotes: string;
+    updateNoReleaseNotes: string;
+    updateDialogIntro: string;
+    updateLater: string;
+    installUpdate: string;
+    updateProgress: string;
+    closeUpdateDialog: string;
     dropMarkdownFile: string;
     dropUnsupported: string;
     closeView: string;
@@ -159,9 +169,9 @@
       diagrams: "图",
       refresh: "刷新",
       memoryRepo: "记忆库",
-      recentRepos: "最近打开",
-      noRecentRepos: "暂无最近记忆库",
-      chooseNewRepo: "选择新记忆库",
+      recentRepos: "快捷切换",
+      noRecentRepos: "暂无最近打开",
+      chooseNewRepo: "打开新记忆库",
       openMarkdownFile: "打开 Markdown 文件",
       checkUpdate: "检查更新",
       updateNow: "更新",
@@ -172,6 +182,15 @@
       noUpdate: "已是最新版本",
       updateReady: "更新已安装，正在重启",
       updateFailed: "更新失败",
+      updateVersion: "版本",
+      updateDate: "发布日期",
+      updateReleaseNotes: "Release Notes",
+      updateNoReleaseNotes: "这个版本没有提供 release note。",
+      updateDialogIntro: "检测到可用的新版本。确认后会开始下载并安装，完成后自动重启应用。",
+      updateLater: "稍后",
+      installUpdate: "安装更新",
+      updateProgress: "更新进度",
+      closeUpdateDialog: "关闭更新弹窗",
       dropMarkdownFile: "松开以打开 Markdown 文件",
       dropUnsupported: "请拖入 .md 文件",
       closeView: "关闭视图",
@@ -257,9 +276,9 @@
       diagrams: "diagrams",
       refresh: "Refresh",
       memoryRepo: "Memory Repo",
-      recentRepos: "Recent repos",
+      recentRepos: "Quick switch",
       noRecentRepos: "No recent repos",
-      chooseNewRepo: "Choose New Repo",
+      chooseNewRepo: "Open New Repo",
       openMarkdownFile: "Open Markdown File",
       checkUpdate: "Check for Updates",
       updateNow: "Update",
@@ -270,6 +289,15 @@
       noUpdate: "Already up to date",
       updateReady: "Update installed, relaunching",
       updateFailed: "Update failed",
+      updateVersion: "Version",
+      updateDate: "Published",
+      updateReleaseNotes: "Release Notes",
+      updateNoReleaseNotes: "No release notes were provided for this version.",
+      updateDialogIntro: "A new version is available. Confirm to download and install it, then the app will relaunch.",
+      updateLater: "Later",
+      installUpdate: "Install update",
+      updateProgress: "Update progress",
+      closeUpdateDialog: "Close update dialog",
       dropMarkdownFile: "Drop to open Markdown file",
       dropUnsupported: "Drop .md files only",
       closeView: "Close view",
@@ -408,7 +436,14 @@
   let updateMessage = "";
   let updateError = false;
   let updateProgress: number | null = null;
+  let updateDialogOpen = false;
+  let pendingUpdate: Update | null = null;
   let pendingUpdateVersion = "";
+  let pendingUpdateDate = "";
+  let pendingUpdateNotes = "";
+  let updateToastMessage = "";
+  let updateToastTone: ToastTone = "info";
+  let updateToastTimer: number | null = null;
   let repoPath = getInitialRepoPath();
   let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
   let activeViewId = openViews[0]?.id ?? "";
@@ -447,6 +482,8 @@
   $: showSidebar = sidebarOpen && !activeViewIsFile;
   $: repoBusy = status === "indexing" || status === "opening";
   $: updateBusy = updateState !== "idle";
+  $: updateInstalling = updateState === "downloading" || updateState === "installing";
+  $: renderedUpdateNotes = renderUpdateNotes(pendingUpdateNotes);
   $: flatTree = snapshot ? flattenTree(snapshot.tree, 0, collapsedFolderIds) : [];
   $: visibleNodes = snapshot
     ? query.trim()
@@ -468,7 +505,6 @@
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
     void setupDragDrop();
-    void checkForStartupUpdate();
     if (repoPath) {
       void loadRepo(repoPath);
     }
@@ -481,6 +517,12 @@
     if (copyDiagramResetTimer !== null) {
       window.clearTimeout(copyDiagramResetTimer);
     }
+    if (updateToastTimer !== null) {
+      window.clearTimeout(updateToastTimer);
+    }
+    void pendingUpdate?.close().catch((err) => {
+      console.warn("Failed to close pending update", err);
+    });
   });
 
   async function setupDragDrop() {
@@ -762,35 +804,93 @@
   }
 
   async function checkForUpdates() {
-    if (updateState !== "idle") {
+    if (updateState !== "idle" || updateDialogOpen) {
       return;
     }
 
     updateState = "checking";
-    updateMessage = t.checkingUpdate;
     updateError = false;
     updateProgress = null;
-    pendingUpdateVersion = "";
+    updateMessage = "";
 
     try {
       const update = await check({ timeout: 30000 });
       if (!update) {
-        updateState = "idle";
-        updateMessage = t.noUpdate;
-        pendingUpdateVersion = "";
+        showUpdateToast(t.noUpdate);
         return;
       }
 
-      let downloaded = 0;
-      let contentLength = 0;
-      updateState = "downloading";
-      updateMessage = `${t.downloadingUpdate} ${update.version}`;
+      openUpdateDialog(update);
+    } catch (err) {
+      showUpdateToast(`${t.updateFailed}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      if (updateState === "checking") {
+        updateState = "idle";
+      }
+    }
+  }
 
-      await update.downloadAndInstall((event: DownloadEvent) => {
+  function openUpdateDialog(update: Update) {
+    if (pendingUpdate && pendingUpdate !== update) {
+      void pendingUpdate.close().catch((err) => {
+        console.warn("Failed to close previous update", err);
+      });
+    }
+
+    pendingUpdate = update;
+    pendingUpdateVersion = update.version;
+    pendingUpdateDate = update.date ?? "";
+    pendingUpdateNotes = update.body?.trim() ?? "";
+    updateDialogOpen = true;
+    updateError = false;
+    updateMessage = "";
+    updateProgress = null;
+  }
+
+  async function closeUpdateDialog() {
+    if (updateInstalling) {
+      return;
+    }
+
+    updateDialogOpen = false;
+    updateError = false;
+    updateMessage = "";
+    updateProgress = null;
+    pendingUpdateVersion = "";
+    pendingUpdateDate = "";
+    pendingUpdateNotes = "";
+
+    const update = pendingUpdate;
+    pendingUpdate = null;
+    if (update) {
+      try {
+        await update.close();
+      } catch (err) {
+        console.warn("Failed to close pending update", err);
+      }
+    }
+  }
+
+  async function installPendingUpdate() {
+    if (!pendingUpdate || updateState !== "idle") {
+      return;
+    }
+
+    let downloaded = 0;
+    let contentLength = 0;
+    updateState = "downloading";
+    updateError = false;
+    updateMessage = `${t.downloadingUpdate} ${pendingUpdate.version}`;
+    updateProgress = 0;
+
+    try {
+      await pendingUpdate.downloadAndInstall((event: DownloadEvent) => {
         if (event.event === "Started") {
           downloaded = 0;
           contentLength = event.data.contentLength ?? 0;
-          updateProgress = null;
+          updateState = "downloading";
+          updateProgress = contentLength > 0 ? 0 : null;
+          updateMessage = `${t.downloadingUpdate} ${pendingUpdateVersion}`;
           return;
         }
 
@@ -804,42 +904,58 @@
 
         updateState = "installing";
         updateMessage = t.installingUpdate;
-        updateProgress = null;
+        updateProgress = 100;
       });
 
+      updateState = "installing";
+      updateProgress = 100;
       updateMessage = t.updateReady;
       await relaunch();
     } catch (err) {
       updateState = "idle";
       updateError = true;
       updateProgress = null;
-      updateMessage = `${t.updateFailed}: ${String(err)}`;
+      updateMessage = `${t.updateFailed}: ${getErrorMessage(err)}`;
     }
   }
 
-  async function checkForStartupUpdate() {
-    if (updateState !== "idle") {
-      return;
+  function showUpdateToast(message: string, tone: ToastTone = "info") {
+    updateToastMessage = message;
+    updateToastTone = tone;
+
+    if (updateToastTimer !== null) {
+      window.clearTimeout(updateToastTimer);
     }
 
-    updateState = "checking";
-    updateError = false;
-    updateProgress = null;
+    updateToastTimer = window.setTimeout(() => {
+      updateToastMessage = "";
+      updateToastTimer = null;
+    }, 2600);
+  }
 
-    try {
-      const update = await check({ timeout: 30000 });
-      if (update) {
-        pendingUpdateVersion = update.version;
-        updateMessage = `${t.updateAvailable} ${update.version}`;
-        await update.close();
-      } else {
-        pendingUpdateVersion = "";
-      }
-    } catch (err) {
-      console.warn("Startup update check failed", err);
-    } finally {
-      updateState = "idle";
+  function renderUpdateNotes(source: string) {
+    if (!source.trim()) {
+      return "";
     }
+
+    return markdown.render(source, { headingCounts: new Map<string, number>() });
+  }
+
+  function formatUpdateDate(value: string) {
+    if (!value) {
+      return "";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    }).format(date);
   }
 
   function handleRecentRepoChange(event: Event) {
@@ -1837,6 +1953,11 @@
     }
 
     if (event.key === "Escape") {
+      if (updateDialogOpen && !updateInstalling) {
+        void closeUpdateDialog();
+        return;
+      }
+
       if (zoomedDiagramHtml) {
         closeDiagram();
         return;
@@ -2157,6 +2278,111 @@
   class:sidebar-closed={!showSidebar}
   class:context-closed={!contextOpen}
 >
+  <div
+    class="app-toolbar"
+    role="toolbar"
+    aria-label="memView"
+    tabindex="-1"
+    data-tauri-drag-region="deep"
+  >
+    <div class="toolbar-left">
+      <button
+        class="ghost icon-button"
+        type="button"
+        disabled={activeViewIsFile}
+        aria-expanded={showSidebar}
+        aria-label={showSidebar ? t.hideSidebar : t.showSidebar}
+        title={showSidebar ? t.hideSidebar : t.showSidebar}
+        on:click={() => (sidebarOpen = !sidebarOpen)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M9 4v16" />
+          {#if showSidebar}
+            <path d="M14 12h-4" />
+            <path d="m13 9-3 3 3 3" />
+          {:else}
+            <path d="M10 12h4" />
+            <path d="m11 9 3 3-3 3" />
+          {/if}
+        </svg>
+      </button>
+    </div>
+    <div class="toolbar-drag-region"></div>
+    <div class="toolbar-actions">
+      <button
+        class="ghost icon-button update-check-button"
+        class:checking={updateState === "checking"}
+        type="button"
+        disabled={updateBusy || updateDialogOpen}
+        aria-busy={updateState === "checking"}
+        aria-label={t.checkUpdate}
+        title={updateState === "checking" ? t.checkingUpdate : t.checkUpdate}
+        on:click={checkForUpdates}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11a8 8 0 0 0-14.5-4.7L3 9" />
+          <path d="M3 5v4h4" />
+          <path d="M4 13a8 8 0 0 0 8 7c2.2 0 4.2-.9 5.7-2.3" />
+          <path d="m14 12 2 2 4-5" />
+        </svg>
+      </button>
+      <button
+        class="ghost icon-button"
+        type="button"
+        disabled={repoBusy}
+        aria-label={t.openMarkdownFile}
+        title={t.openMarkdownFile}
+        on:click={browseMarkdownFile}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <path d="M14 3v5h5" />
+          <path d="M8 13h8" />
+          <path d="M8 17h5" />
+        </svg>
+      </button>
+      <div class="language-toggle" role="group" aria-label={t.language}>
+        <button
+          class:active={locale === "zh-CN"}
+          type="button"
+          aria-pressed={locale === "zh-CN"}
+          on:click={() => setLocale("zh-CN")}
+        >
+          中文
+        </button>
+        <button
+          class:active={locale === "en"}
+          type="button"
+          aria-pressed={locale === "en"}
+          on:click={() => setLocale("en")}
+        >
+          EN
+        </button>
+      </div>
+      <button
+        class="ghost icon-button"
+        type="button"
+        aria-expanded={contextOpen}
+        aria-label={contextOpen ? t.hideDetails : t.showDetails}
+        title={contextOpen ? t.hideDetails : t.showDetails}
+        on:click={() => (contextOpen = !contextOpen)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M15 4v16" />
+          {#if contextOpen}
+            <path d="M10 12h4" />
+            <path d="m13 9-3 3 3 3" />
+          {:else}
+            <path d="M14 12h-4" />
+            <path d="m11 9 3 3-3 3" />
+          {/if}
+        </svg>
+      </button>
+    </div>
+  </div>
+
   {#if isDragHovering}
     <div class="drop-overlay" aria-hidden="true">
       <div class="drop-target">
@@ -2212,30 +2438,13 @@
   <aside class="sidebar">
     <div class="brand">
       <div>
-        <h1>memView</h1>
+        <h1>{repoName(repoPath) || t.memoryRepo}</h1>
         <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
-      </div>
-      <div class="brand-actions">
-        <button
-          class="ghost icon-button"
-          type="button"
-          aria-expanded={sidebarOpen}
-          aria-label={t.hideSidebar}
-          title={t.hideSidebar}
-          on:click={() => (sidebarOpen = false)}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M9 4v16" />
-            <path d="M14 12h-4" />
-            <path d="m13 9-3 3 3 3" />
-          </svg>
-        </button>
       </div>
     </div>
 
     <section class="repo-picker">
-      <label for="recent-repo">{t.memoryRepo}</label>
+      <label for="recent-repo">{t.recentRepos}</label>
       <div class="repo-recent-row">
         <select
           id="recent-repo"
@@ -2331,23 +2540,6 @@
   <section class="content">
     <header class="reader-head">
       <div class="reader-head-main">
-        {#if !showSidebar && !activeViewIsFile}
-          <button
-            class="ghost icon-button"
-            type="button"
-            aria-expanded={sidebarOpen}
-            aria-label={t.showSidebar}
-            title={t.showSidebar}
-            on:click={() => (sidebarOpen = true)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M9 4v16" />
-              <path d="M10 12h4" />
-              <path d="m11 9 3 3-3 3" />
-            </svg>
-          </button>
-        {/if}
         <div class="reader-title">
           <div class="eyebrow">{formatKind(headerKind)}</div>
           <h2>{headerTitle}</h2>
@@ -2368,51 +2560,6 @@
             <path d="m16 16 4 4" />
           </svg>
         </button>
-        <button
-          class="ghost icon-button"
-          type="button"
-          disabled={updateBusy}
-          aria-label={t.checkUpdate}
-          title={updateMessage || t.checkUpdate}
-          on:click={checkForUpdates}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20 11a8 8 0 0 0-14.5-4.7L3 9" />
-            <path d="M3 5v4h4" />
-            <path d="M4 13a8 8 0 0 0 8 7c2.2 0 4.2-.9 5.7-2.3" />
-            <path d="m14 12 2 2 4-5" />
-          </svg>
-        </button>
-        {#if updateMessage}
-          <span class="update-message" class:error={updateError} title={updateMessage}>
-            {updateMessage}{updateProgress !== null ? ` ${updateProgress}%` : ""}
-          </span>
-          {#if pendingUpdateVersion && !updateBusy}
-            <button
-              class="ghost update-action"
-              type="button"
-              title={`${t.updateNow} ${pendingUpdateVersion}`}
-              on:click={checkForUpdates}
-            >
-              {t.updateNow}
-            </button>
-          {/if}
-        {/if}
-        <button
-          class="ghost icon-button"
-          type="button"
-          disabled={repoBusy}
-          aria-label={t.openMarkdownFile}
-          title={t.openMarkdownFile}
-          on:click={browseMarkdownFile}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-            <path d="M14 3v5h5" />
-            <path d="M8 13h8" />
-            <path d="M8 17h5" />
-          </svg>
-        </button>
         {#if activeViewIsFile || !snapshot}
           <button
             class="ghost icon-button"
@@ -2429,44 +2576,6 @@
           </button>
         {/if}
         <span class={`status ${status}`}>{t.status[status]}</span>
-        <div class="language-toggle" role="group" aria-label={t.language}>
-          <button
-            class:active={locale === "zh-CN"}
-            type="button"
-            aria-pressed={locale === "zh-CN"}
-            on:click={() => setLocale("zh-CN")}
-          >
-            中文
-          </button>
-          <button
-            class:active={locale === "en"}
-            type="button"
-            aria-pressed={locale === "en"}
-            on:click={() => setLocale("en")}
-          >
-            EN
-          </button>
-        </div>
-        <button
-          class="ghost icon-button"
-          type="button"
-          aria-expanded={contextOpen}
-          aria-label={contextOpen ? t.hideDetails : t.showDetails}
-          title={contextOpen ? t.hideDetails : t.showDetails}
-          on:click={() => (contextOpen = !contextOpen)}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M15 4v16" />
-            {#if contextOpen}
-              <path d="M10 12h4" />
-              <path d="m13 9-3 3 3 3" />
-            {:else}
-              <path d="M14 12h-4" />
-              <path d="m11 9 3 3-3 3" />
-            {/if}
-          </svg>
-        </button>
       </div>
     </header>
 
@@ -2604,6 +2713,111 @@
         </dl>
       </section>
     </aside>
+  {/if}
+
+  {#if updateToastMessage}
+    <div class="update-toast" class:error={updateToastTone === "error"} role="status">
+      <span class="update-toast-icon" aria-hidden="true">
+        {updateToastTone === "error" ? "!" : ""}
+      </span>
+      <span>{updateToastMessage}</span>
+    </div>
+  {/if}
+
+  {#if updateDialogOpen}
+    <div class="update-modal" role="dialog" aria-modal="true" aria-label={t.updateAvailable}>
+      <section class="update-dialog">
+        <div class="update-dialog-head">
+          <div>
+            <div class="eyebrow">{t.checkUpdate}</div>
+            <h2>{t.updateAvailable}</h2>
+            <p>{t.updateDialogIntro}</p>
+          </div>
+          <button
+            class="ghost icon-button"
+            type="button"
+            disabled={updateInstalling}
+            aria-label={t.closeUpdateDialog}
+            title={t.closeUpdateDialog}
+            on:click={closeUpdateDialog}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <dl class="update-meta">
+          <div>
+            <dt>{t.updateVersion}</dt>
+            <dd>{pendingUpdateVersion}</dd>
+          </div>
+          {#if pendingUpdateDate}
+            <div>
+              <dt>{t.updateDate}</dt>
+              <dd>{formatUpdateDate(pendingUpdateDate)}</dd>
+            </div>
+          {/if}
+        </dl>
+
+        <section class="update-notes" aria-label={t.updateReleaseNotes}>
+          <h3>{t.updateReleaseNotes}</h3>
+          {#if renderedUpdateNotes}
+            <div class="update-notes-content">
+              {@html renderedUpdateNotes}
+            </div>
+          {:else}
+            <p class="update-empty-notes">{t.updateNoReleaseNotes}</p>
+          {/if}
+        </section>
+
+        {#if updateInstalling || updateError}
+          <div class="update-progress-panel" class:error={updateError}>
+            <div class="update-progress-line">
+              <span>{updateMessage || t.updateProgress}</span>
+              {#if updateProgress !== null && updateInstalling}
+                <strong>{updateProgress}%</strong>
+              {/if}
+            </div>
+            {#if updateInstalling}
+              <div
+                class="update-progress-track"
+                class:indeterminate={updateProgress === null}
+                role="progressbar"
+                aria-label={t.updateProgress}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={updateProgress ?? undefined}
+              >
+                {#if updateProgress !== null}
+                  <div class="update-progress-fill" style={`width: ${updateProgress}%`}></div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="update-dialog-actions">
+          <button
+            class="ghost"
+            type="button"
+            disabled={updateInstalling}
+            on:click={closeUpdateDialog}
+          >
+            {t.updateLater}
+          </button>
+          <button
+            class="primary"
+            type="button"
+            disabled={updateInstalling}
+            on:click={installPendingUpdate}
+          >
+            {updateInstalling ? t.installingUpdate : t.installUpdate}
+          </button>
+        </div>
+      </section>
+    </div>
   {/if}
 
   {#if zoomedDiagramHtml}

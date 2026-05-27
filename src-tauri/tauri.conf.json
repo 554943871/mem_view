@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "memView",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "identifier": "io.github.user554943871.memview",
   "build": {
     "beforeDevCommand": "npm run dev:web",
@@ -17,6 +17,12 @@
         "height": 780,
         "minWidth": 920,
         "minHeight": 560,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 18
+        },
         "visible": true
       }
     ],

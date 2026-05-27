@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.9
+
+- Moved global toolbar actions into the macOS titlebar row.
+- Refined the overlay titlebar spacing and restored native dragging in the top region.
+- Reworked update checking into a modal flow with release notes, install confirmation, and progress.
+- Made the no-update result more visible with a top-centered tip and animated checking state.
+- Updated the sidebar repository header with a clearer quick-switch control and separate open-new-repo action.
+
 ## v0.2.8
 
 - Added Mermaid diagram image copying to the system clipboard.

@@ -9,6 +9,7 @@ const tauriConfig = JSON.parse(readFileSync(path.join(root, "src-tauri/tauri.con
 const version = tauriConfig.version;
 const productName = tauriConfig.productName;
 const githubRepo = "554943871/mem_view";
+const releaseNotes = readReleaseNotes(version);
 const appBinary = path.join(
   root,
   "src-tauri/target/release/bundle/macos",
@@ -55,7 +56,7 @@ const assetUrl = `https://github.com/${githubRepo}/releases/download/v${version}
 const signature = readFileSync(signatureFile, "utf8").trim();
 const latest = {
   version,
-  notes: "",
+  notes: releaseNotes,
   pub_date: new Date().toISOString(),
   platforms: {
     [platform]: {
@@ -79,3 +80,28 @@ if (existsSync(dmgFile)) {
   uploadNames.unshift(path.basename(dmgFile));
 }
 console.log(`Upload ${uploadNames.join(", ")} to GitHub release v${version}.`);
+
+function readReleaseNotes(releaseVersion) {
+  const changelogPath = path.join(root, "CHANGELOG.md");
+  if (!existsSync(changelogPath)) {
+    return "";
+  }
+
+  const changelog = readFileSync(changelogPath, "utf8");
+  const headingPattern = new RegExp(`^##\\s+v?${escapeRegExp(releaseVersion)}\\s*$`, "m");
+  const heading = headingPattern.exec(changelog);
+  if (!heading || heading.index === undefined) {
+    return "";
+  }
+
+  const notesStart = heading.index + heading[0].length;
+  const remaining = changelog.slice(notesStart);
+  const nextHeadingIndex = remaining.search(/^##\s+/m);
+  return remaining
+    .slice(0, nextHeadingIndex === -1 ? undefined : nextHeadingIndex)
+    .trim();
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
