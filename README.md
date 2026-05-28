@@ -13,11 +13,11 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.2.12](https://github.com/554943871/mem_view/releases/tag/v0.2.12)
+[Download memView v0.2.13](https://github.com/554943871/mem_view/releases/tag/v0.2.13)
 
 Direct dmg asset:
 
-[memView_0.2.12_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.12/memView_0.2.12_arm64.dmg)
+[memView_0.2.13_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.13/memView_0.2.13_arm64.dmg)
 
 ## Important: macOS Gatekeeper Notice
 
@@ -30,8 +30,8 @@ check it for malicious software, only proceed if you trust this repository and
 the downloaded release asset. You can remove the quarantine flag from the dmg:
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.12_arm64.dmg
-open /path/to/memView_0.2.12_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.13_arm64.dmg
+open /path/to/memView_0.2.13_arm64.dmg
 ```
 
 If you already copied the app into Applications or another folder, remove

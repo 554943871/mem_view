@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.13
+
+- Updated the annotation export prompt to distinguish document edits from document questions.
+- Instructed Codex to avoid modifying files for question-only or unclear annotation notes.
+
 ## v0.2.12
 
 - Added AI-driven annotation export for Markdown documents.

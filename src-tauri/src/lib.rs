@@ -310,7 +310,7 @@ fn annotation_temp_file_path(base: &Path, timestamp_millis: u128) -> PathBuf {
 
 fn build_annotation_prompt(annotation_file_path: &str) -> String {
     format!(
-        "请根据 memView 生成的标注文件修改规格文档。\n\n标注文件路径：{}\n\n工作要求：\n1. 先读取这个 JSON 标注文件，理解每条 annotation 的 note、coveredNodes 和 rect。\n2. 再读取 JSON 中 documents[].path 指向的原 Markdown 文件。\n3. 优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位需要修改的规格内容；rect 只作为视觉辅助，不要只凭坐标修改。\n4. 根据每条 note 修改对应规格文档。不要修改未被标注要求影响的内容。\n5. 完成后说明修改了哪些文件，以及每处标注对应的处理结果。\n",
+        "请根据 memView 生成的标注文件处理规格文档标注。\n\n标注文件路径：{}\n\n工作要求：\n1. 先读取这个 JSON 标注文件，理解每条 annotation 的 note、coveredNodes 和 rect。\n2. 再读取 JSON 中 documents[].path 指向的原 Markdown 文件。\n3. 优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位标注对应的规格内容；rect 只作为视觉辅助，不要只凭坐标判断。\n4. 对每条 note 先判断意图：\n   - 如果 note 明确要求修正、补充、删除、改写或同步规格内容，才按该要求做最小范围修改。\n   - 如果 note 是问题、求解释、求确认、求分析，或修改意图不明确，只基于对应文档内容回答问题，不要改文件。\n   - 如果 note 同时包含问题和明确修改要求，先回答问题，再只修改明确要求修改的内容。\n5. 不要修改未被标注要求影响的内容；没有明确修改要求时不要为了回答问题而改文档。\n6. 完成后说明修改了哪些文件（如果没有修改则说明无文件修改），并逐条说明每处标注的意图判断、定位依据和处理结果。\n",
         annotation_file_path
     )
 }
@@ -896,6 +896,8 @@ mod tests {
         assert!(prompt.contains(&path.to_string_lossy().to_string()));
         assert!(prompt.contains("sourceLines"));
         assert!(prompt.contains("documents[].path"));
+        assert!(prompt.contains("先判断意图"));
+        assert!(prompt.contains("不要改文件"));
     }
 
     #[test]
