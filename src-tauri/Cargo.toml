@@ -1,7 +1,7 @@
 [package]
 name = "mem-view"
-version = "0.2.13"
-description = "A read-only local viewer for mem repositories"
+version = "0.2.14"
+description = "A local viewer and manual Git refresher for mem repositories"
 authors = ["god"]
 edition = "2021"
 

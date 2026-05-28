@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.14
+
+- Added Git pull before repository re-indexing from the sidebar refresh button.
+- Updated documentation to describe Pull & Refresh as the only repository write path.
+
 ## v0.2.13
 
 - Updated the annotation export prompt to distinguish document edits from document questions.

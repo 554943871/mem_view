@@ -36,6 +36,10 @@
       requirements: number;
     };
   };
+  type GitPullResult = {
+    rootPath: string;
+    message: string;
+  };
 
   type Document = {
     id: string;
@@ -130,6 +134,7 @@
   };
   type LoadRepoOptions = {
     preserveCurrentDocument?: boolean;
+    pullBeforeScan?: boolean;
   };
   type OpenDocumentOptions = {
     restoreScrollTop?: number;
@@ -143,7 +148,7 @@
   };
   type LinkTarget = { type: ViewType; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
-  type StatusKey = "idle" | "loading" | "indexing" | "ready" | "opening" | "error";
+  type StatusKey = "idle" | "loading" | "syncing" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
   type CheckUpdateOptions = {
     notifyNoUpdate?: boolean;
@@ -240,6 +245,7 @@
     annotationExporting: string;
     annotationExported: string;
     annotationExportFailed: string;
+    pullFailed: string;
     editAnnotation: string;
     deleteAnnotation: string;
     status: Record<StatusKey, string>;
@@ -258,7 +264,7 @@
     "zh-CN": {
       docs: "文档",
       diagrams: "图",
-      refresh: "刷新",
+      refresh: "拉取并刷新",
       memoryRepo: "记忆库",
       recentRepos: "快捷切换",
       noRecentRepos: "暂无最近打开",
@@ -345,11 +351,13 @@
       annotationExporting: "完成中",
       annotationExported: "标注提示词已复制",
       annotationExportFailed: "标注导出失败",
+      pullFailed: "Git 拉取失败",
       editAnnotation: "编辑标注备注",
       deleteAnnotation: "删除标注",
       status: {
         idle: "待选择",
         loading: "加载中",
+        syncing: "拉取中",
         indexing: "索引中",
         ready: "就绪",
         opening: "打开中",
@@ -381,7 +389,7 @@
     en: {
       docs: "docs",
       diagrams: "diagrams",
-      refresh: "Refresh",
+      refresh: "Pull & Refresh",
       memoryRepo: "Memory Repo",
       recentRepos: "Quick switch",
       noRecentRepos: "No recent repos",
@@ -468,11 +476,13 @@
       annotationExporting: "Finishing",
       annotationExported: "Annotation prompt copied",
       annotationExportFailed: "Annotation export failed",
+      pullFailed: "Git pull failed",
       editAnnotation: "Edit annotation note",
       deleteAnnotation: "Delete annotation",
       status: {
         idle: "Choose Repo",
         loading: "Loading",
+        syncing: "Pulling",
         indexing: "Indexing",
         ready: "Ready",
         opening: "Opening",
@@ -674,7 +684,7 @@
   $: canNavigateBack = navigationIndex > 0;
   $: canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
   $: showSidebar = sidebarOpen && !activeViewIsFile;
-  $: repoBusy = status === "indexing" || status === "opening";
+  $: repoBusy = status === "syncing" || status === "indexing" || status === "opening";
   $: updateBusy = updateState !== "idle";
   $: updateInstalling = updateState === "downloading" || updateState === "installing";
   $: renderedUpdateNotes = renderUpdateNotes(pendingUpdateNotes);
@@ -1212,8 +1222,19 @@
       ? new Set(collapsedFolderIds)
       : null;
 
-    status = "indexing";
     error = "";
+    if (options.pullBeforeScan) {
+      status = "syncing";
+      try {
+        await invoke<GitPullResult>("pull_repo", { repoPath: nextRepoPath });
+      } catch (err) {
+        error = `${t.pullFailed}: ${getErrorMessage(err)}`;
+        status = "error";
+        return;
+      }
+    }
+
+    status = "indexing";
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
       repoPath = snapshot.root_path;
@@ -3297,7 +3318,7 @@
         disabled={!repoPath || repoBusy}
         aria-label={t.refresh}
         title={t.refresh}
-        on:click={() => loadRepo(repoPath, { preserveCurrentDocument: true })}
+        on:click={() => loadRepo(repoPath, { preserveCurrentDocument: true, pullBeforeScan: true })}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 6v5h-5" />

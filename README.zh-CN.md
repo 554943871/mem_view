@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-memView 是一个极简、只读的 macOS 本地应用，用来浏览本地 Markdown
+memView 是一个极简 macOS 本地应用，用来浏览并手动刷新本地 Markdown
 记忆库。它适合处理包含大量 `.md` 文件和 Mermaid 图的记忆库，目标是快速、
 安静地查看内容，而不是编辑内容。
 
@@ -13,11 +13,11 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.2.13](https://github.com/554943871/mem_view/releases/tag/v0.2.13)
+[下载 memView v0.2.14](https://github.com/554943871/mem_view/releases/tag/v0.2.14)
 
 直接下载 dmg：
 
-[memView_0.2.13_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.13/memView_0.2.13_arm64.dmg)
+[memView_0.2.14_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.14/memView_0.2.14_arm64.dmg)
 
 ## 重要：macOS Gatekeeper 提示
 
@@ -28,8 +28,8 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 下载的 Release 资产时继续。可以先对 dmg 移除 quarantine 标记：
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.13_arm64.dmg
-open /path/to/memView_0.2.13_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.14_arm64.dmg
+open /path/to/memView_0.2.14_arm64.dmg
 ```
 
 如果已经把应用复制到了 Applications 或其他目录，也可以对 app bundle 移除 quarantine：
@@ -41,7 +41,8 @@ xattr -dr com.apple.quarantine /path/to/memView.app
 ## 功能
 
 - 本地 macOS 桌面应用，基于 Tauri 打包。
-- 只读浏览 Markdown，不会修改记忆库文件。
+- 浏览 Markdown，并为 Git 记忆库提供显式的拉取并刷新动作。
+- 拉取并刷新按钮会先执行 `git pull --ff-only`，再重新索引文件。
 - 首次启动选择本地记忆库目录。
 - 后续启动自动打开上次选择的记忆库。
 - 扫描记忆库并展示文件树。
@@ -169,6 +170,6 @@ memView 打开你在应用里选择的记忆库目录。这个路径只保存在
 ## MVP 说明
 
 - 主要面向 macOS。
-- 设计上保持只读。
+- 设计上以浏览为主；唯一会写入记忆库的路径是显式点击拉取并刷新。
 - 记忆库路径由用户选择，并保存在本地。
 - 它面向本地 Markdown 和 Mermaid 记忆库，不是通用笔记编辑器。

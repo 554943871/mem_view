@@ -2,9 +2,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-memView is a minimal, read-only macOS app for browsing local Markdown memory
-repositories. It is built for memory repos that contain many `.md` files and
-Mermaid diagrams, with a focus on fast local viewing rather than editing.
+memView is a minimal macOS app for browsing and manually refreshing local
+Markdown memory repositories. It is built for memory repos that contain many
+`.md` files and Mermaid diagrams, with a focus on fast local viewing rather
+than editing.
 
 memView does not hard-code a memory repository. On first launch, choose a local
 folder to open. The selected folder is saved locally and reopened next time.
@@ -13,11 +14,11 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.2.13](https://github.com/554943871/mem_view/releases/tag/v0.2.13)
+[Download memView v0.2.14](https://github.com/554943871/mem_view/releases/tag/v0.2.14)
 
 Direct dmg asset:
 
-[memView_0.2.13_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.13/memView_0.2.13_arm64.dmg)
+[memView_0.2.14_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.14/memView_0.2.14_arm64.dmg)
 
 ## Important: macOS Gatekeeper Notice
 
@@ -30,8 +31,8 @@ check it for malicious software, only proceed if you trust this repository and
 the downloaded release asset. You can remove the quarantine flag from the dmg:
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.13_arm64.dmg
-open /path/to/memView_0.2.13_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.14_arm64.dmg
+open /path/to/memView_0.2.14_arm64.dmg
 ```
 
 If you already copied the app into Applications or another folder, remove
@@ -44,7 +45,8 @@ xattr -dr com.apple.quarantine /path/to/memView.app
 ## Features
 
 - Local-only macOS desktop app, packaged with Tauri.
-- Read-only Markdown browsing. It does not modify the memory repository.
+- Markdown browsing with an explicit Pull & Refresh action for Git repositories.
+- The Pull & Refresh button runs `git pull --ff-only` before re-indexing files.
 - Choose a local memory repository folder on first launch.
 - Reopen the last selected memory repository on later launches.
 - Scans the memory repo and shows a file tree.
@@ -172,7 +174,8 @@ from the repository picker in the sidebar.
 ## MVP Notes
 
 - macOS-focused.
-- Read-only by design.
+- Browsing-focused by design; the only repository write path is the explicit
+  Pull & Refresh action.
 - The memory repo path is user-selected and stored locally.
 - The app is optimized for local Markdown and Mermaid memory libraries, not for
   general-purpose note editing.

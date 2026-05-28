@@ -17,6 +17,13 @@ struct RepoSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitPullResult {
+    root_path: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
 struct RepoCounts {
     markdown: usize,
     mermaid: usize,
@@ -159,6 +166,34 @@ fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
         docs,
         counts,
     })
+}
+
+#[tauri::command]
+fn pull_repo(repo_path: String) -> Result<GitPullResult, String> {
+    let root = normalize_repo_path(&repo_path)?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("pull")
+        .arg("--ff-only")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|err| format!("无法执行 git pull：{}", err))?;
+    let message = command_output_text(&output.stdout, &output.stderr);
+
+    if output.status.success() {
+        Ok(GitPullResult {
+            root_path: root.to_string_lossy().to_string(),
+            message,
+        })
+    } else {
+        let detail = if message.is_empty() {
+            output.status.to_string()
+        } else {
+            message
+        };
+        Err(format!("git pull --ff-only 执行失败：\n{}", detail))
+    }
 }
 
 #[tauri::command]
@@ -477,6 +512,18 @@ fn find_git_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+fn command_output_text(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (false, false) => format!("{}\n{}", stdout, stderr),
+    }
+}
+
 fn scan_markdown_docs(root: &Path) -> Result<Vec<DocMeta>, String> {
     let mut docs = Vec::new();
 
@@ -746,6 +793,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan_repo,
+            pull_repo,
             read_document,
             read_markdown_file,
             finish_annotation_export,
@@ -808,6 +856,33 @@ mod tests {
             .expect_err("non-git dir should be rejected");
 
         assert!(err.contains("Git"));
+    }
+
+    #[test]
+    fn pull_repo_rejects_non_git_directory() {
+        let root = build_temp_dir("pull-non-git");
+        fs::create_dir_all(&root).expect("non-git test dir should create");
+
+        let err = pull_repo(root.to_string_lossy().to_string())
+            .expect_err("non-git dir should be rejected before shelling out");
+
+        assert!(err.contains("Git"));
+    }
+
+    #[test]
+    fn combines_command_output_without_extra_blank_lines() {
+        assert_eq!(
+            command_output_text(b"Already up to date.\n", b""),
+            "Already up to date."
+        );
+        assert_eq!(
+            command_output_text(b"", b"fatal: no upstream\n"),
+            "fatal: no upstream"
+        );
+        assert_eq!(
+            command_output_text(b"stdout\n", b"stderr\n"),
+            "stdout\nstderr"
+        );
     }
 
     #[test]
