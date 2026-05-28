@@ -55,9 +55,73 @@
   type FlatNode = TreeNode & { depth: number };
   type DocHeading = { id: string; title: string; level: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
-  type MarkdownRenderEnv = { headingCounts: Map<string, number> };
+  type MarkdownRenderEnv = {
+    headingCounts: Map<string, number>;
+    nodeCounts: Map<string, number>;
+  };
   type ViewType = "repo" | "file";
   type CopyDiagramState = "idle" | "copying" | "copied" | "error";
+  type AnnotationSourceLines = { start: number; end: number };
+  type AnnotationRect = {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    scrollTop: number;
+    scrollLeft: number;
+    readerWidth: number;
+    readerHeight: number;
+  };
+  type AnnotationCoveredNode = {
+    nodeId: string;
+    type: string;
+    sourceLines: AnnotationSourceLines | null;
+    headingPath: string[];
+    textExcerpt: string;
+    intersectionRatio: number;
+    isPrimary: boolean;
+  };
+  type AnnotationDocumentMeta = {
+    path: string;
+    relativePath: string;
+    repoPath: string | null;
+    title: string;
+    kind: string;
+  };
+  type AnnotationItem = {
+    id: string;
+    note: string;
+    rect: AnnotationRect;
+    coveredNodes: AnnotationCoveredNode[];
+    document: AnnotationDocumentMeta;
+  };
+  type AnnotationDraft = {
+    startX: number;
+    startY: number;
+    rect: AnnotationRect;
+  };
+  type AnnotationExportPayload = {
+    schemaVersion: string;
+    createdAtUnixMs: number;
+    app: string;
+    documents: Array<{
+      path: string;
+      relativePath: string;
+      repoPath: string | null;
+      title: string;
+      kind: string;
+      annotations: Array<{
+        id: string;
+        note: string;
+        rect: AnnotationRect;
+        coveredNodes: AnnotationCoveredNode[];
+      }>;
+    }>;
+  };
+  type AnnotationExportResult = {
+    annotationFilePath: string;
+    prompt: string;
+  };
   type OpenView = {
     id: string;
     type: ViewType;
@@ -165,6 +229,19 @@
     findNext: string;
     closeFind: string;
     findNoMatches: string;
+    annotationMode: string;
+    startAnnotation: string;
+    stopAnnotation: string;
+    finishAnnotations: string;
+    annotationNotePlaceholder: string;
+    annotationEmptyNote: string;
+    annotationNoCoveredNodes: string;
+    annotationNoAnnotations: string;
+    annotationExporting: string;
+    annotationExported: string;
+    annotationExportFailed: string;
+    editAnnotation: string;
+    deleteAnnotation: string;
     status: Record<StatusKey, string>;
     kinds: Record<string, string>;
     chainLabels: Record<string, string>;
@@ -257,6 +334,19 @@
       findNext: "下一个匹配",
       closeFind: "关闭查找",
       findNoMatches: "没有匹配",
+      annotationMode: "标注模式",
+      startAnnotation: "开始标注",
+      stopAnnotation: "退出标注",
+      finishAnnotations: "完成标注",
+      annotationNotePlaceholder: "点击填写备注",
+      annotationEmptyNote: "请先填写所有标注备注",
+      annotationNoCoveredNodes: "这个标注没有覆盖到可识别的文档内容",
+      annotationNoAnnotations: "还没有可导出的标注",
+      annotationExporting: "完成中",
+      annotationExported: "标注提示词已复制",
+      annotationExportFailed: "标注导出失败",
+      editAnnotation: "编辑标注备注",
+      deleteAnnotation: "删除标注",
       status: {
         idle: "待选择",
         loading: "加载中",
@@ -367,6 +457,19 @@
       findNext: "Next match",
       closeFind: "Close find",
       findNoMatches: "No matches",
+      annotationMode: "Annotation mode",
+      startAnnotation: "Start annotation",
+      stopAnnotation: "Exit annotation",
+      finishAnnotations: "Finish annotations",
+      annotationNotePlaceholder: "Click to add note",
+      annotationEmptyNote: "Fill every annotation note first",
+      annotationNoCoveredNodes: "This annotation did not cover recognizable document content",
+      annotationNoAnnotations: "No annotations to export",
+      annotationExporting: "Finishing",
+      annotationExported: "Annotation prompt copied",
+      annotationExportFailed: "Annotation export failed",
+      editAnnotation: "Edit annotation note",
+      deleteAnnotation: "Delete annotation",
       status: {
         idle: "Choose Repo",
         loading: "Loading",
@@ -405,8 +508,12 @@
     typographer: true
   });
   const defaultHeadingOpenRenderer = markdown.renderer.rules.heading_open;
+  const defaultParagraphOpenRenderer = markdown.renderer.rules.paragraph_open;
+  const defaultListItemOpenRenderer = markdown.renderer.rules.list_item_open;
+  const defaultBlockquoteOpenRenderer = markdown.renderer.rules.blockquote_open;
   const defaultTableOpenRenderer = markdown.renderer.rules.table_open;
   const defaultTableCloseRenderer = markdown.renderer.rules.table_close;
+  const defaultTableRowOpenRenderer = markdown.renderer.rules.tr_open;
 
   markdown.renderer.rules.heading_open = (tokens, index, options, env, self) => {
     const token = tokens[index];
@@ -416,13 +523,36 @@
       token.attrJoin("class", "reader-heading");
       token.attrSet("tabindex", "-1");
     }
+    annotateSourceToken(token, "heading", env as MarkdownRenderEnv);
 
     return defaultHeadingOpenRenderer
       ? defaultHeadingOpenRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
   };
 
+  markdown.renderer.rules.paragraph_open = (tokens, index, options, env, self) => {
+    annotateSourceToken(tokens[index], "paragraph", env as MarkdownRenderEnv);
+    return defaultParagraphOpenRenderer
+      ? defaultParagraphOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.list_item_open = (tokens, index, options, env, self) => {
+    annotateSourceToken(tokens[index], "list_item", env as MarkdownRenderEnv);
+    return defaultListItemOpenRenderer
+      ? defaultListItemOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.blockquote_open = (tokens, index, options, env, self) => {
+    annotateSourceToken(tokens[index], "blockquote", env as MarkdownRenderEnv);
+    return defaultBlockquoteOpenRenderer
+      ? defaultBlockquoteOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
   markdown.renderer.rules.table_open = (tokens, index, options, env, self) => {
+    annotateSourceToken(tokens[index], "table", env as MarkdownRenderEnv);
     const tableOpen = defaultTableOpenRenderer
       ? defaultTableOpenRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
@@ -434,6 +564,37 @@
       ? defaultTableCloseRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
     return `${tableClose}</div>`;
+  };
+
+  markdown.renderer.rules.tr_open = (tokens, index, options, env, self) => {
+    annotateSourceToken(tokens[index], "table_row", env as MarkdownRenderEnv);
+    return defaultTableRowOpenRenderer
+      ? defaultTableRowOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.fence = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const info = token.info.trim();
+    if (info.split(/\s+/)[0]?.toLowerCase() === "mermaid") {
+      const attrs = sourceTokenAttrs(token, "mermaid", env as MarkdownRenderEnv);
+      return `
+        <figure class="diagram-frame"${attrs}>
+          <div class="diagram-actions">
+            <button class="diagram-copy" type="button" aria-label="${escapeHtml(t.copyDiagram)}" title="${escapeHtml(t.copyDiagram)}"></button>
+            <button class="diagram-zoom" type="button" aria-label="${escapeHtml(t.enlargeDiagram)}" title="${escapeHtml(t.enlargeDiagram)}"></button>
+          </div>
+          <div class="mermaid">${escapeHtml(token.content)}</div>
+        </figure>
+      `;
+    }
+
+    return renderCodeToken(token, info, env as MarkdownRenderEnv);
+  };
+
+  markdown.renderer.rules.code_block = (tokens, index, _options, env, _self) => {
+    const token = tokens[index];
+    return renderCodeToken(token, "", env as MarkdownRenderEnv);
   };
 
   mermaid.initialize({
@@ -498,6 +659,13 @@
   let findMatchCount = 0;
   let activeFindIndex = 0;
   let findInput: HTMLInputElement | null = null;
+  let readerElement: HTMLElement | null = null;
+  let annotationMode = false;
+  let annotationDraft: AnnotationDraft | null = null;
+  let annotationPointerId: number | null = null;
+  let annotationsByPath = new Map<string, AnnotationItem[]>();
+  let editingAnnotationId = "";
+  let annotationExporting = false;
 
   $: t = messages[locale];
   $: activeView = getOpenView(activeViewId);
@@ -525,6 +693,14 @@
   $: findStatus = formatFindStatus();
   $: copyDiagramButtonText = getCopyDiagramStateText(copyDiagramState);
   $: copyDiagramButtonTitle = getCopyDiagramButtonTitle();
+  $: currentDocumentKey = current ? normalizePathname(current.path) : "";
+  $: currentAnnotations = currentDocumentKey
+    ? annotationsByPath.get(currentDocumentKey) ?? []
+    : [];
+  $: annotationModeButtonLabel = annotationMode ? t.stopAnnotation : t.annotationMode;
+  $: finishAnnotationButtonLabel = currentAnnotations.length
+    ? `${t.finishAnnotations} ${currentAnnotations.length}`
+    : t.finishAnnotations;
 
   onMount(() => {
     document.documentElement.lang = locale;
@@ -979,7 +1155,7 @@
       return "";
     }
 
-    return markdown.render(source, { headingCounts: new Map<string, number>() });
+    return markdown.render(source, createRenderEnv());
   }
 
   function formatUpdateDate(value: string) {
@@ -1251,22 +1427,11 @@
   }
 
   function renderMarkdown(source: string) {
-    return markdown.render(source, { headingCounts: new Map<string, number>() }).replace(
-      /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
-      (_, encoded: string) => `
-        <figure class="diagram-frame">
-          <div class="diagram-actions">
-            <button class="diagram-copy" type="button" aria-label="${t.copyDiagram}" title="${t.copyDiagram}"></button>
-            <button class="diagram-zoom" type="button" aria-label="${t.enlargeDiagram}" title="${t.enlargeDiagram}"></button>
-          </div>
-          <div class="mermaid">${decodeHtml(encoded)}</div>
-        </figure>
-      `
-    );
+    return markdown.render(source, createRenderEnv());
   }
 
   function getDocumentHeadings(source: string): DocHeading[] {
-    const env: MarkdownRenderEnv = { headingCounts: new Map<string, number>() };
+    const env = createRenderEnv();
     const tokens = markdown.parse(source, {});
     const headings: DocHeading[] = [];
 
@@ -1351,6 +1516,62 @@
     const textarea = document.createElement("textarea");
     textarea.innerHTML = value;
     return textarea.value;
+  }
+
+  function createRenderEnv(): MarkdownRenderEnv {
+    return {
+      headingCounts: new Map<string, number>(),
+      nodeCounts: new Map<string, number>()
+    };
+  }
+
+  function annotateSourceToken(token: any, nodeType: string, env: MarkdownRenderEnv) {
+    const attrs = sourceTokenData(token, nodeType, env);
+    for (const [name, value] of Object.entries(attrs)) {
+      token.attrSet(name, value);
+    }
+  }
+
+  function sourceTokenAttrs(token: any, nodeType: string, env: MarkdownRenderEnv) {
+    const attrs = sourceTokenData(token, nodeType, env);
+    return Object.entries(attrs)
+      .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`)
+      .join("");
+  }
+
+  function sourceTokenData(token: any, nodeType: string, env: MarkdownRenderEnv) {
+    const data: Record<string, string> = {
+      "data-mem-node-id": getUniqueNodeId(token, nodeType, env),
+      "data-node-type": nodeType
+    };
+    if (Array.isArray(token.map) && token.map.length >= 2) {
+      data["data-source-line-start"] = String(token.map[0] + 1);
+      data["data-source-line-end"] = String(token.map[1]);
+    }
+    return data;
+  }
+
+  function getUniqueNodeId(token: any, nodeType: string, env: MarkdownRenderEnv) {
+    const map = Array.isArray(token.map) ? token.map : null;
+    const base = `${nodeType}-${map ? `${map[0] + 1}-${map[1]}` : "unknown"}`;
+    const count = env.nodeCounts.get(base) ?? 0;
+    env.nodeCounts.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count + 1}`;
+  }
+
+  function renderCodeToken(token: any, info: string, env: MarkdownRenderEnv) {
+    const lang = info.split(/\s+/)[0]?.trim();
+    const className = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+    const attrs = sourceTokenAttrs(token, "code_block", env);
+    return `<pre${attrs}><code${className}>${escapeHtml(token.content)}</code></pre>\n`;
+  }
+
+  function escapeHtml(value: string) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   function getUniqueHeadingId(content: string, env: MarkdownRenderEnv) {
@@ -1878,6 +2099,390 @@
     setActiveFindMatch(undefined, true);
   }
 
+  function toggleAnnotationMode() {
+    if (!current || annotationExporting) {
+      return;
+    }
+
+    annotationMode = !annotationMode;
+    annotationDraft = null;
+    annotationPointerId = null;
+    if (!annotationMode) {
+      editingAnnotationId = "";
+    }
+  }
+
+  function handleReaderPointerDown(event: PointerEvent) {
+    if (!annotationMode || !current || !readerElement || event.button !== 0) {
+      return;
+    }
+
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("a, button, input, textarea, select, .annotation-note, .diagram-actions")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    const point = getReaderContentPoint(event);
+    annotationDraft = {
+      startX: point.x,
+      startY: point.y,
+      rect: createAnnotationRect(point.x, point.y, point.x, point.y)
+    };
+    annotationPointerId = event.pointerId;
+    readerElement.setPointerCapture(event.pointerId);
+  }
+
+  function handleReaderPointerMove(event: PointerEvent) {
+    if (!annotationDraft || !readerElement || annotationPointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const point = getReaderContentPoint(event);
+    annotationDraft = {
+      ...annotationDraft,
+      rect: createAnnotationRect(annotationDraft.startX, annotationDraft.startY, point.x, point.y)
+    };
+  }
+
+  function handleReaderPointerUp(event: PointerEvent) {
+    if (!annotationDraft || !readerElement || annotationPointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const draft = annotationDraft;
+    releaseAnnotationPointer(event);
+    annotationDraft = null;
+    annotationPointerId = null;
+
+    if (draft.rect.width < 8 || draft.rect.height < 8) {
+      return;
+    }
+
+    addAnnotationFromRect(draft.rect);
+  }
+
+  function handleReaderPointerCancel(event: PointerEvent) {
+    if (annotationPointerId !== event.pointerId) {
+      return;
+    }
+    releaseAnnotationPointer(event);
+    annotationDraft = null;
+    annotationPointerId = null;
+  }
+
+  function releaseAnnotationPointer(event: PointerEvent) {
+    if (!readerElement?.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    readerElement.releasePointerCapture(event.pointerId);
+  }
+
+  function getReaderContentPoint(event: PointerEvent) {
+    if (!readerElement) {
+      return { x: 0, y: 0 };
+    }
+    const bounds = readerElement.getBoundingClientRect();
+    return {
+      x: event.clientX - bounds.left + readerElement.scrollLeft,
+      y: event.clientY - bounds.top + readerElement.scrollTop
+    };
+  }
+
+  function createAnnotationRect(x1: number, y1: number, x2: number, y2: number): AnnotationRect {
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    return {
+      left: roundNumber(left),
+      top: roundNumber(top),
+      width: roundNumber(Math.abs(x2 - x1)),
+      height: roundNumber(Math.abs(y2 - y1)),
+      scrollTop: roundNumber(readerElement?.scrollTop ?? 0),
+      scrollLeft: roundNumber(readerElement?.scrollLeft ?? 0),
+      readerWidth: roundNumber(readerElement?.clientWidth ?? 0),
+      readerHeight: roundNumber(readerElement?.clientHeight ?? 0)
+    };
+  }
+
+  function addAnnotationFromRect(rect: AnnotationRect) {
+    if (!current || !currentDocumentKey) {
+      return;
+    }
+
+    const coveredNodes = getCoveredNodes(rect, current);
+    if (!coveredNodes.length) {
+      showUpdateToast(t.annotationNoCoveredNodes, "error");
+      return;
+    }
+
+    const annotation: AnnotationItem = {
+      id: createAnnotationId(),
+      note: "",
+      rect,
+      coveredNodes,
+      document: getCurrentAnnotationDocumentMeta()
+    };
+    const next = [...currentAnnotations, annotation];
+    setAnnotationsForPath(currentDocumentKey, next);
+    editingAnnotationId = annotation.id;
+  }
+
+  function setAnnotationsForPath(path: string, items: AnnotationItem[]) {
+    const next = new Map(annotationsByPath);
+    if (items.length) {
+      next.set(path, items);
+    } else {
+      next.delete(path);
+    }
+    annotationsByPath = next;
+  }
+
+  function updateAnnotationNote(id: string, note: string) {
+    if (!currentDocumentKey) {
+      return;
+    }
+    setAnnotationsForPath(
+      currentDocumentKey,
+      currentAnnotations.map((annotation) =>
+        annotation.id === id ? { ...annotation, note } : annotation
+      )
+    );
+  }
+
+  function removeAnnotation(id: string) {
+    if (!currentDocumentKey) {
+      return;
+    }
+    setAnnotationsForPath(
+      currentDocumentKey,
+      currentAnnotations.filter((annotation) => annotation.id !== id)
+    );
+    if (editingAnnotationId === id) {
+      editingAnnotationId = "";
+    }
+  }
+
+  function annotationNotePlacement(annotation: AnnotationItem) {
+    const gap = 10;
+    const noteWidth = editingAnnotationId === annotation.id ? 300 : 278;
+    const viewportLeft = readerElement?.scrollLeft ?? 0;
+    const viewportRight = viewportLeft + (readerElement?.clientWidth ?? 0);
+    const preferredRight = annotation.rect.left + annotation.rect.width + gap;
+    const canPlaceRight = preferredRight + noteWidth <= viewportRight - 8;
+    const left = canPlaceRight
+      ? preferredRight
+      : Math.max(viewportLeft + 8, annotation.rect.left - noteWidth - gap);
+
+    return {
+      className: canPlaceRight ? "right" : "left",
+      style: `left: ${roundNumber(left)}px; top: ${annotation.rect.top}px`
+    };
+  }
+
+  function annotationDeleteStyle(annotation: AnnotationItem) {
+    return `left: ${roundNumber(annotation.rect.left + annotation.rect.width - 12)}px; top: ${roundNumber(annotation.rect.top - 12)}px`;
+  }
+
+  async function finishCurrentPageAnnotations() {
+    if (!currentAnnotations.length) {
+      showUpdateToast(t.annotationNoAnnotations, "error");
+      return;
+    }
+    const incomplete = currentAnnotations.find((annotation) => !annotation.note.trim());
+    if (incomplete) {
+      editingAnnotationId = incomplete.id;
+      showUpdateToast(t.annotationEmptyNote, "error");
+      return;
+    }
+
+    const payload = buildAnnotationExportPayload(currentAnnotations);
+    annotationExporting = true;
+    try {
+      const result = await invoke<AnnotationExportResult>("finish_annotation_export", { payload });
+      if (currentDocumentKey) {
+        setAnnotationsForPath(currentDocumentKey, []);
+      }
+      annotationMode = false;
+      editingAnnotationId = "";
+      showUpdateToast(`${t.annotationExported}: ${result.annotationFilePath}`);
+    } catch (err) {
+      showUpdateToast(`${t.annotationExportFailed}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      annotationExporting = false;
+    }
+  }
+
+  function buildAnnotationExportPayload(annotations: AnnotationItem[]): AnnotationExportPayload {
+    const document = annotations[0].document;
+
+    return {
+      schemaVersion: "memView.annotation.v1",
+      createdAtUnixMs: Date.now(),
+      app: "memView",
+      documents: [
+        {
+          path: document.path,
+          relativePath: document.relativePath,
+          repoPath: document.repoPath,
+          title: document.title,
+          kind: document.kind,
+          annotations: annotations.map((annotation) => ({
+            id: annotation.id,
+            note: annotation.note.trim(),
+            rect: annotation.rect,
+            coveredNodes: annotation.coveredNodes
+          }))
+        }
+      ]
+    };
+  }
+
+  function getCurrentAnnotationDocumentMeta(): AnnotationDocumentMeta {
+    return {
+      path: current?.path ?? "",
+      relativePath: current?.relative_path ?? "",
+      repoPath: activeViewIsFile ? null : repoPath || null,
+      title: current?.title ?? "",
+      kind: activeViewIsFile ? "markdown_file" : current?.kind ?? "document"
+    };
+  }
+
+  function getCoveredNodes(rect: AnnotationRect, document: Document): AnnotationCoveredNode[] {
+    if (!readerElement) {
+      return [];
+    }
+
+    const sourceLines = document.markdown.split(/\r?\n/);
+    const candidates = Array.from(
+      readerElement.querySelectorAll<HTMLElement>("[data-mem-node-id]")
+    )
+      .map((element) => {
+        const nodeRect = getElementContentRect(element);
+        const intersectionArea = getIntersectionArea(rect, nodeRect);
+        const nodeArea = nodeRect.width * nodeRect.height;
+        return {
+          element,
+          intersectionArea,
+          intersectionRatio: nodeArea > 0 ? intersectionArea / nodeArea : 0
+        };
+      })
+      .filter((item) => item.intersectionArea > 1)
+      .sort((a, b) => {
+        const aRect = getElementContentRect(a.element);
+        const bRect = getElementContentRect(b.element);
+        return aRect.top - bRect.top || aRect.left - bRect.left;
+      });
+
+    const primary = candidates.reduce<(typeof candidates)[number] | null>(
+      (best, item) => !best || item.intersectionArea > best.intersectionArea ? item : best,
+      null
+    );
+
+    return candidates.map((item) => {
+      const lines = getElementSourceLines(item.element);
+      return {
+        nodeId: item.element.dataset.memNodeId ?? "",
+        type: item.element.dataset.nodeType ?? item.element.tagName.toLowerCase(),
+        sourceLines: lines,
+        headingPath: getHeadingPathForElement(item.element),
+        textExcerpt: getElementTextExcerpt(item.element, lines, sourceLines),
+        intersectionRatio: roundNumber(item.intersectionRatio),
+        isPrimary: item === primary
+      };
+    });
+  }
+
+  function getElementContentRect(element: HTMLElement) {
+    const readerBounds = readerElement?.getBoundingClientRect();
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: roundNumber(bounds.left - (readerBounds?.left ?? 0) + (readerElement?.scrollLeft ?? 0)),
+      top: roundNumber(bounds.top - (readerBounds?.top ?? 0) + (readerElement?.scrollTop ?? 0)),
+      width: roundNumber(bounds.width),
+      height: roundNumber(bounds.height)
+    };
+  }
+
+  function getIntersectionArea(
+    a: Pick<AnnotationRect, "left" | "top" | "width" | "height">,
+    b: Pick<AnnotationRect, "left" | "top" | "width" | "height">
+  ) {
+    const left = Math.max(a.left, b.left);
+    const top = Math.max(a.top, b.top);
+    const right = Math.min(a.left + a.width, b.left + b.width);
+    const bottom = Math.min(a.top + a.height, b.top + b.height);
+    return Math.max(0, right - left) * Math.max(0, bottom - top);
+  }
+
+  function getElementSourceLines(element: HTMLElement): AnnotationSourceLines | null {
+    const start = Number(element.dataset.sourceLineStart);
+    const end = Number(element.dataset.sourceLineEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end < start) {
+      return null;
+    }
+    return { start, end };
+  }
+
+  function getElementTextExcerpt(
+    element: HTMLElement,
+    sourceLines: AnnotationSourceLines | null,
+    markdownLines: string[]
+  ) {
+    const sourceText = sourceLines
+      ? markdownLines.slice(sourceLines.start - 1, sourceLines.end).join("\n")
+      : "";
+    const renderedText = element.innerText || element.textContent || "";
+    return limitExcerpt(normalizeExcerpt(sourceText || renderedText));
+  }
+
+  function normalizeExcerpt(value: string) {
+    return value.replace(/\s+/g, " ").trim();
+  }
+
+  function limitExcerpt(value: string) {
+    return value.length > 800 ? `${value.slice(0, 797)}...` : value;
+  }
+
+  function getHeadingPathForElement(element: HTMLElement) {
+    if (!readerElement) {
+      return [];
+    }
+
+    const path: string[] = [];
+    const headings = Array.from(
+      readerElement.querySelectorAll<HTMLElement>(".reader-heading[data-mem-node-id]")
+    );
+    for (const heading of headings) {
+      const relation = heading.compareDocumentPosition(element);
+      const isBeforeOrSame = heading === element || Boolean(relation & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (!isBeforeOrSame) {
+        continue;
+      }
+
+      const level = Number(heading.tagName.slice(1));
+      if (!Number.isFinite(level) || level < 1) {
+        continue;
+      }
+      path.length = Math.max(0, level - 1);
+      path[level - 1] = normalizeExcerpt(heading.textContent ?? "");
+    }
+
+    return path.filter(Boolean);
+  }
+
+  function createAnnotationId() {
+    return `ann-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function roundNumber(value: number) {
+    return Math.round(value * 100) / 100;
+  }
+
   function isFindShortcut(event: KeyboardEvent) {
     return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "f";
   }
@@ -2128,6 +2733,13 @@
 
       if (findOpen) {
         closeFind();
+        return;
+      }
+
+      if (annotationDraft) {
+        annotationDraft = null;
+        annotationPointerId = null;
+        return;
       }
       return;
     }
@@ -2737,6 +3349,39 @@
       </div>
       <div class="head-actions">
         <button
+          class="ghost annotation-toggle"
+          class:active={annotationMode}
+          type="button"
+          disabled={!current || annotationExporting}
+          aria-pressed={annotationMode}
+          aria-label={annotationModeButtonLabel}
+          title={annotationModeButtonLabel}
+          on:click={toggleAnnotationMode}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              class="annotation-bubble-outline"
+              d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H12l-4.6 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"
+            />
+            <path class="annotation-bubble-line" d="M7.5 9.2h8.6" />
+            <path class="annotation-bubble-line" d="M7.5 12.6h6.3" />
+          </svg>
+          <span>{annotationModeButtonLabel}</span>
+        </button>
+        <button
+          class="primary annotation-finish"
+          type="button"
+          disabled={!current || !currentAnnotations.length || annotationExporting}
+          aria-label={finishAnnotationButtonLabel}
+          title={finishAnnotationButtonLabel}
+          on:click={finishCurrentPageAnnotations}
+        >
+          <span>{annotationExporting ? t.annotationExporting : t.finishAnnotations}</span>
+          {#if currentAnnotations.length}
+            <strong>{currentAnnotations.length}</strong>
+          {/if}
+        </button>
+        <button
           class="ghost icon-button"
           type="button"
           disabled={!current}
@@ -2827,8 +3472,84 @@
       {/if}
 
       {#if current}
-        <article class="reader">
+        <article
+          class="reader"
+          class:annotating={annotationMode}
+          bind:this={readerElement}
+          on:pointerdown={handleReaderPointerDown}
+          on:pointermove={handleReaderPointerMove}
+          on:pointerup={handleReaderPointerUp}
+          on:pointercancel={handleReaderPointerCancel}
+        >
           {@html renderedHtml}
+          {#each currentAnnotations as annotation (annotation.id)}
+            {@const notePlacement = annotationNotePlacement(annotation)}
+            <div
+              class="annotation-box"
+              class:active={editingAnnotationId === annotation.id}
+              style={`left: ${annotation.rect.left}px; top: ${annotation.rect.top}px; width: ${annotation.rect.width}px; height: ${annotation.rect.height}px`}
+              role="button"
+              tabindex="0"
+              aria-label={t.editAnnotation}
+              on:pointerdown={(event) => event.stopPropagation()}
+              on:click={() => (editingAnnotationId = annotation.id)}
+              on:keydown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  editingAnnotationId = annotation.id;
+                }
+              }}
+            ></div>
+            <button
+              class="annotation-box-delete"
+              class:active={editingAnnotationId === annotation.id}
+              type="button"
+              style={annotationDeleteStyle(annotation)}
+              aria-label={t.deleteAnnotation}
+              title={t.deleteAnnotation}
+              on:pointerdown={(event) => event.stopPropagation()}
+              on:click={() => removeAnnotation(annotation.id)}
+            >
+              x
+            </button>
+            <div
+              class={`annotation-note ${notePlacement.className}`}
+              class:active={editingAnnotationId === annotation.id}
+              style={notePlacement.style}
+              role="group"
+              aria-label={t.editAnnotation}
+              on:pointerdown={(event) => {
+                event.stopPropagation();
+                editingAnnotationId = annotation.id;
+              }}
+            >
+              {#if editingAnnotationId === annotation.id}
+                <textarea
+                  value={annotation.note}
+                  placeholder={t.annotationNotePlaceholder}
+                  aria-label={t.editAnnotation}
+                  on:input={(event) => updateAnnotationNote(annotation.id, event.currentTarget.value)}
+                  on:blur={() => (editingAnnotationId = "")}
+                ></textarea>
+              {:else}
+                <button
+                  class="annotation-note-text"
+                  type="button"
+                  title={t.editAnnotation}
+                  on:click={() => (editingAnnotationId = annotation.id)}
+                >
+                  {annotation.note || t.annotationNotePlaceholder}
+                </button>
+              {/if}
+            </div>
+          {/each}
+          {#if annotationDraft}
+            <div
+              class="annotation-box draft"
+              style={`left: ${annotationDraft.rect.left}px; top: ${annotationDraft.rect.top}px; width: ${annotationDraft.rect.width}px; height: ${annotationDraft.rect.height}px`}
+              aria-hidden="true"
+            ></div>
+          {/if}
         </article>
       {:else}
         <section class="repo-empty">

@@ -72,6 +72,75 @@ struct ClipboardSvg {
     svg: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationExportPayload {
+    schema_version: String,
+    created_at_unix_ms: u64,
+    app: String,
+    documents: Vec<AnnotationDocument>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationDocument {
+    path: String,
+    relative_path: String,
+    repo_path: Option<String>,
+    title: String,
+    kind: String,
+    annotations: Vec<AnnotationItem>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationItem {
+    id: String,
+    note: String,
+    rect: AnnotationRect,
+    covered_nodes: Vec<AnnotationCoveredNode>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationRect {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    scroll_top: f64,
+    scroll_left: f64,
+    reader_width: f64,
+    reader_height: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationCoveredNode {
+    node_id: String,
+    #[serde(rename = "type")]
+    node_type: String,
+    source_lines: Option<AnnotationSourceLines>,
+    heading_path: Vec<String>,
+    text_excerpt: String,
+    intersection_ratio: f64,
+    is_primary: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationSourceLines {
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationExportResult {
+    annotation_file_path: String,
+    prompt: String,
+}
+
 #[tauri::command]
 fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
     let root = normalize_repo_path(&repo_path)?;
@@ -171,6 +240,89 @@ fn copy_svg_to_clipboard(image: ClipboardSvg) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn finish_annotation_export(
+    payload: AnnotationExportPayload,
+) -> Result<AnnotationExportResult, String> {
+    let annotation_file_path = write_annotation_export(&payload)?;
+    let annotation_file_path_string = annotation_file_path.to_string_lossy().to_string();
+    let prompt = build_annotation_prompt(&annotation_file_path_string);
+    copy_text_to_clipboard(&prompt)?;
+
+    Ok(AnnotationExportResult {
+        annotation_file_path: annotation_file_path_string,
+        prompt,
+    })
+}
+
+fn write_annotation_export(payload: &AnnotationExportPayload) -> Result<PathBuf, String> {
+    validate_annotation_export(payload)?;
+    let path = annotation_temp_file_path(&std::env::temp_dir(), unix_timestamp_millis());
+    write_annotation_export_to_path(payload, &path)?;
+    Ok(path)
+}
+
+fn write_annotation_export_to_path(
+    payload: &AnnotationExportPayload,
+    path: &Path,
+) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(payload)
+        .map_err(|err| format!("序列化标注文件失败：{}", err))?;
+    fs::write(path, json).map_err(|err| format!("写入标注临时文件失败：{} ({})", path.display(), err))
+}
+
+fn validate_annotation_export(payload: &AnnotationExportPayload) -> Result<(), String> {
+    if payload.schema_version.trim().is_empty() {
+        return Err("标注 schemaVersion 为空".to_string());
+    }
+    if payload.documents.is_empty() {
+        return Err("没有可导出的标注文档".to_string());
+    }
+    let annotation_count: usize = payload
+        .documents
+        .iter()
+        .map(|document| document.annotations.len())
+        .sum();
+    if annotation_count == 0 {
+        return Err("没有可导出的标注".to_string());
+    }
+    if payload.documents.iter().any(|document| document.path.trim().is_empty()) {
+        return Err("标注文档路径不能为空".to_string());
+    }
+    if payload
+        .documents
+        .iter()
+        .flat_map(|document| document.annotations.iter())
+        .any(|annotation| annotation.note.trim().is_empty())
+    {
+        return Err("标注备注不能为空".to_string());
+    }
+    Ok(())
+}
+
+fn annotation_temp_file_path(base: &Path, timestamp_millis: u128) -> PathBuf {
+    base.join(format!(
+        "mem-view-annotations-{}-{}.json",
+        std::process::id(),
+        timestamp_millis
+    ))
+}
+
+fn build_annotation_prompt(annotation_file_path: &str) -> String {
+    format!(
+        "请根据 memView 生成的标注文件修改规格文档。\n\n标注文件路径：{}\n\n工作要求：\n1. 先读取这个 JSON 标注文件，理解每条 annotation 的 note、coveredNodes 和 rect。\n2. 再读取 JSON 中 documents[].path 指向的原 Markdown 文件。\n3. 优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位需要修改的规格内容；rect 只作为视觉辅助，不要只凭坐标修改。\n4. 根据每条 note 修改对应规格文档。不要修改未被标注要求影响的内容。\n5. 完成后说明修改了哪些文件，以及每处标注对应的处理结果。\n",
+        annotation_file_path
+    )
+}
+
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard =
+        Clipboard::new().map_err(|err| format!("打开系统剪贴板失败：{}", err))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|err| format!("写入系统剪贴板失败：{}", err))
+}
+
 #[cfg(target_os = "macos")]
 fn copy_png_to_macos_clipboard(bytes: &[u8]) -> Result<(), String> {
     let path = std::env::temp_dir().join(format!(
@@ -260,6 +412,15 @@ fn unix_timestamp_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn unix_timestamp_millis() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
         .unwrap_or_default()
 }
 
@@ -587,6 +748,7 @@ pub fn run() {
             scan_repo,
             read_document,
             read_markdown_file,
+            finish_annotation_export,
             copy_svg_to_clipboard,
             copy_image_to_clipboard
         ])
@@ -690,6 +852,99 @@ mod tests {
             .expect_err("non-markdown file should be rejected");
 
         assert!(err.contains("Markdown"));
+    }
+
+    #[test]
+    fn serializes_annotation_export_payload_with_camel_case_keys() {
+        let payload = build_annotation_payload();
+        let json = serde_json::to_string_pretty(&payload).expect("payload should serialize");
+
+        assert!(json.contains("\"schemaVersion\""));
+        assert!(json.contains("\"createdAtUnixMs\""));
+        assert!(json.contains("\"repoPath\""));
+        assert!(json.contains("\"coveredNodes\""));
+        assert!(json.contains("\"sourceLines\""));
+        assert!(json.contains("\"intersectionRatio\""));
+    }
+
+    #[test]
+    fn builds_annotation_temp_file_path_with_expected_name() {
+        let base = PathBuf::from("/tmp");
+        let path = annotation_temp_file_path(&base, 12345);
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("temp path should have file name");
+
+        assert_eq!(path.parent(), Some(base.as_path()));
+        assert!(file_name.starts_with("mem-view-annotations-"));
+        assert!(file_name.ends_with("-12345.json"));
+    }
+
+    #[test]
+    fn writes_annotation_file_and_prompt_references_it() {
+        let root = build_temp_dir("annotation-export");
+        fs::create_dir_all(&root).expect("annotation temp dir should create");
+        let path = root.join("annotations.json");
+        let payload = build_annotation_payload();
+
+        write_annotation_export_to_path(&payload, &path).expect("annotation file should write");
+        let prompt = build_annotation_prompt(&path.to_string_lossy());
+        let json = fs::read_to_string(&path).expect("annotation file should be readable");
+
+        assert!(json.contains("需要补充边界条件"));
+        assert!(prompt.contains(&path.to_string_lossy().to_string()));
+        assert!(prompt.contains("sourceLines"));
+        assert!(prompt.contains("documents[].path"));
+    }
+
+    #[test]
+    fn rejects_empty_annotation_note() {
+        let mut payload = build_annotation_payload();
+        payload.documents[0].annotations[0].note.clear();
+
+        let err = validate_annotation_export(&payload)
+            .expect_err("empty annotation note should be rejected");
+
+        assert!(err.contains("备注"));
+    }
+
+    fn build_annotation_payload() -> AnnotationExportPayload {
+        AnnotationExportPayload {
+            schema_version: "memView.annotation.v1".to_string(),
+            created_at_unix_ms: 123,
+            app: "memView".to_string(),
+            documents: vec![AnnotationDocument {
+                path: "/tmp/spec.md".to_string(),
+                relative_path: "spec.md".to_string(),
+                repo_path: Some("/tmp".to_string()),
+                title: "Spec".to_string(),
+                kind: "requirement".to_string(),
+                annotations: vec![AnnotationItem {
+                    id: "ann-1".to_string(),
+                    note: "需要补充边界条件".to_string(),
+                    rect: AnnotationRect {
+                        left: 10.0,
+                        top: 20.0,
+                        width: 120.0,
+                        height: 48.0,
+                        scroll_top: 0.0,
+                        scroll_left: 0.0,
+                        reader_width: 800.0,
+                        reader_height: 600.0,
+                    },
+                    covered_nodes: vec![AnnotationCoveredNode {
+                        node_id: "paragraph-1-2".to_string(),
+                        node_type: "paragraph".to_string(),
+                        source_lines: Some(AnnotationSourceLines { start: 3, end: 4 }),
+                        heading_path: vec!["Spec".to_string()],
+                        text_excerpt: "原始规格内容".to_string(),
+                        intersection_ratio: 0.7,
+                        is_primary: true,
+                    }],
+                }],
+            }],
+        }
     }
 
     fn build_test_repo() -> PathBuf {

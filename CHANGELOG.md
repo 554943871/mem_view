@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.12
+
+- Added AI-driven annotation export for Markdown documents.
+- Added source-aware annotation capture with visual boxes, editable notes, and page-scoped export.
+- Added temporary JSON annotation bundles and copied Codex prompts for document updates.
+
 ## v0.2.11
 
 - Restored automatic update checks when the app starts.

@@ -22,7 +22,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -676,6 +677,62 @@ h1 {
   gap: 10px;
 }
 
+.annotation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.annotation-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.annotation-toggle .annotation-bubble-outline {
+  stroke-dasharray: 2.4 2.8;
+}
+
+.annotation-toggle .annotation-bubble-line {
+  opacity: 0.72;
+  stroke-width: 1.7;
+}
+
+.annotation-toggle.active {
+  border-color: #d8b45d;
+  background: #fff3cd;
+  color: #5f4211;
+}
+
+.annotation-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+}
+
+.annotation-finish strong {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: #5f4211;
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 5px;
+}
+
+.annotation-finish strong {
+  background: #ffffff;
+  color: #1f4f46;
+}
+
 .find-bar {
   display: flex;
   align-items: center;
@@ -788,11 +845,126 @@ h1 {
 }
 
 .reader {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 24px 34px 54px;
+}
+
+.reader.annotating {
+  cursor: crosshair;
+  user-select: none;
+}
+
+.annotation-box {
+  position: absolute;
+  z-index: 5;
+  border: 2px solid #d29922;
+  border-style: dashed;
+  border-radius: 6px;
+  background: rgba(255, 212, 102, 0.18);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+}
+
+.annotation-box.active {
+  z-index: 25;
+  border-color: #9b6a0d;
+  background: rgba(255, 212, 102, 0.26);
+}
+
+.annotation-box.draft {
+  background: rgba(255, 212, 102, 0.12);
+}
+
+.annotation-box-delete {
+  position: absolute;
+  z-index: 7;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid #b77a13;
+  border-radius: 999px;
+  background: #fffaf0;
+  color: #5f4211;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0;
+  box-shadow: 0 5px 16px rgba(31, 41, 51, 0.18);
+}
+
+.annotation-box-delete.active {
+  z-index: 27;
+}
+
+.annotation-box-delete:hover {
+  background: #ffefbd;
+}
+
+.annotation-note {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  width: 278px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #d8b45d;
+  border-radius: 7px;
+  background: #fffaf0;
+  color: #3e2d11;
+  box-shadow: 0 10px 28px rgba(31, 41, 51, 0.16);
+  cursor: default;
+}
+
+.annotation-note.active {
+  z-index: 26;
+}
+
+.annotation-note.editing,
+.annotation-note.active {
+  width: 300px;
+}
+
+.annotation-note.left {
+  transform-origin: right top;
+}
+
+.annotation-note.right {
+  transform-origin: left top;
+}
+
+.annotation-note-text {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.annotation-note-text {
+  min-height: 34px;
+  overflow: hidden;
+  padding: 8px 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-note-text:hover,
+.annotation-note textarea:hover {
+  background: #ffefbd;
+}
+
+.annotation-note textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  padding: 8px 10px;
 }
 
 .repo-empty {
