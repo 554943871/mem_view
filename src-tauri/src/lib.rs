@@ -148,6 +148,27 @@ struct AnnotationExportResult {
     prompt: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationExportFile<'a> {
+    task: &'static str,
+    work_requirements: &'static [&'static str],
+    #[serde(flatten)]
+    payload: &'a AnnotationExportPayload,
+}
+
+const ANNOTATION_EXPORT_TASK: &str = "根据 memView 标注处理对应 Markdown 规格文档。";
+const ANNOTATION_EXPORT_WORK_REQUIREMENTS: &[&str] = &[
+    "先读取并理解本 JSON 文件中的 task、workRequirements、documents[].path、annotations[].note、coveredNodes 和 rect。",
+    "再读取 documents[].path 指向的原 Markdown 文件。",
+    "优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位标注对应的规格内容；rect 只作为视觉辅助，不要只凭坐标判断。",
+    "对每条 annotations[].note 先判断意图：如果 note 明确要求修正、补充、删除、改写或同步规格内容，才按该要求做最小范围修改。",
+    "如果 note 是问题、求解释、求确认、求分析，或修改意图不明确，只基于对应文档内容回答问题，不要改文件。",
+    "如果 note 同时包含问题和明确修改要求，先回答问题，再只修改明确要求修改的内容。",
+    "不要修改未被标注要求影响的内容；没有明确修改要求时不要为了回答问题而改文档。",
+    "完成后说明修改了哪些文件；如果没有修改则说明无文件修改，并逐条说明每处标注的意图判断、定位依据和处理结果。",
+];
+
 #[tauri::command]
 fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
     let root = normalize_repo_path(&repo_path)?;
@@ -301,7 +322,12 @@ fn write_annotation_export_to_path(
     payload: &AnnotationExportPayload,
     path: &Path,
 ) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(payload)
+    let export_file = AnnotationExportFile {
+        task: ANNOTATION_EXPORT_TASK,
+        work_requirements: ANNOTATION_EXPORT_WORK_REQUIREMENTS,
+        payload,
+    };
+    let json = serde_json::to_string_pretty(&export_file)
         .map_err(|err| format!("序列化标注文件失败：{}", err))?;
     fs::write(path, json).map_err(|err| format!("写入标注临时文件失败：{} ({})", path.display(), err))
 }
@@ -345,7 +371,7 @@ fn annotation_temp_file_path(base: &Path, timestamp_millis: u128) -> PathBuf {
 
 fn build_annotation_prompt(annotation_file_path: &str) -> String {
     format!(
-        "请根据 memView 生成的标注文件处理规格文档标注。\n\n标注文件路径：{}\n\n工作要求：\n1. 先读取这个 JSON 标注文件，理解每条 annotation 的 note、coveredNodes 和 rect。\n2. 再读取 JSON 中 documents[].path 指向的原 Markdown 文件。\n3. 优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位标注对应的规格内容；rect 只作为视觉辅助，不要只凭坐标判断。\n4. 对每条 note 先判断意图：\n   - 如果 note 明确要求修正、补充、删除、改写或同步规格内容，才按该要求做最小范围修改。\n   - 如果 note 是问题、求解释、求确认、求分析，或修改意图不明确，只基于对应文档内容回答问题，不要改文件。\n   - 如果 note 同时包含问题和明确修改要求，先回答问题，再只修改明确要求修改的内容。\n5. 不要修改未被标注要求影响的内容；没有明确修改要求时不要为了回答问题而改文档。\n6. 完成后说明修改了哪些文件（如果没有修改则说明无文件修改），并逐条说明每处标注的意图判断、定位依据和处理结果。\n",
+        "请读取并严格执行 memView 标注临时文件中的任务说明：\n{}\n\n先理解文件里的 workRequirements 和标注数据，再处理对应 Markdown 文档。",
         annotation_file_path
     )
 }
@@ -957,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_annotation_file_and_prompt_references_it() {
+    fn writes_annotation_file_with_requirements_and_short_prompt() {
         let root = build_temp_dir("annotation-export");
         fs::create_dir_all(&root).expect("annotation temp dir should create");
         let path = root.join("annotations.json");
@@ -968,11 +994,14 @@ mod tests {
         let json = fs::read_to_string(&path).expect("annotation file should be readable");
 
         assert!(json.contains("需要补充边界条件"));
+        assert!(json.contains("\"workRequirements\""));
+        assert!(json.contains("不要为了回答问题而改文档"));
+        assert!(json.contains("sourceLines"));
+        assert!(json.contains("documents"));
         assert!(prompt.contains(&path.to_string_lossy().to_string()));
-        assert!(prompt.contains("sourceLines"));
-        assert!(prompt.contains("documents[].path"));
-        assert!(prompt.contains("先判断意图"));
-        assert!(prompt.contains("不要改文件"));
+        assert!(prompt.contains("workRequirements"));
+        assert!(!prompt.contains("sourceLines"));
+        assert!(!prompt.contains("不要改文件"));
     }
 
     #[test]

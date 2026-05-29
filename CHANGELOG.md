@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.16
+
+- Moved annotation export work requirements into the temporary JSON bundle.
+- Shortened the copied annotation prompt so it only points agents to the bundle.
+
 ## v0.2.15
 
 - Fixed local Markdown image rendering for relative image paths in memView.
