@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "memView",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "identifier": "io.github.user554943871.memview",
   "build": {
     "beforeDevCommand": "npm run dev:web",
@@ -27,7 +27,17 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/**",
+          "$DOCUMENT/**",
+          "$DESKTOP/**",
+          "$DOWNLOAD/**",
+          "$TEMP/**"
+        ]
+      }
     }
   },
   "bundle": {

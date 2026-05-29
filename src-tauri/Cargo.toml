@@ -1,6 +1,6 @@
 [package]
 name = "mem-view"
-version = "0.2.14"
+version = "0.2.15"
 description = "A local viewer and manual Git refresher for mem repositories"
 authors = ["god"]
 edition = "2021"
@@ -23,7 +23,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -62,6 +62,7 @@
   type MarkdownRenderEnv = {
     headingCounts: Map<string, number>;
     nodeCounts: Map<string, number>;
+    documentPath: string;
   };
   type ViewType = "repo" | "file";
   type CopyDiagramState = "idle" | "copying" | "copied" | "error";
@@ -524,6 +525,7 @@
   const defaultTableOpenRenderer = markdown.renderer.rules.table_open;
   const defaultTableCloseRenderer = markdown.renderer.rules.table_close;
   const defaultTableRowOpenRenderer = markdown.renderer.rules.tr_open;
+  const defaultImageRenderer = markdown.renderer.rules.image;
 
   markdown.renderer.rules.heading_open = (tokens, index, options, env, self) => {
     const token = tokens[index];
@@ -580,6 +582,23 @@
     annotateSourceToken(tokens[index], "table_row", env as MarkdownRenderEnv);
     return defaultTableRowOpenRenderer
       ? defaultTableRowOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.image = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const resolvedSrc = resolveMarkdownImageSrc(
+      token.attrGet("src"),
+      env as MarkdownRenderEnv
+    );
+    if (resolvedSrc) {
+      token.attrSet("src", resolvedSrc);
+    }
+    token.attrJoin("class", "reader-image");
+    token.attrSet("loading", "lazy");
+
+    return defaultImageRenderer
+      ? defaultImageRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
   };
 
@@ -1448,7 +1467,7 @@
   }
 
   function renderMarkdown(source: string) {
-    return markdown.render(source, createRenderEnv());
+    return markdown.render(source, createRenderEnv(current));
   }
 
   function getDocumentHeadings(source: string): DocHeading[] {
@@ -1539,10 +1558,11 @@
     return textarea.value;
   }
 
-  function createRenderEnv(): MarkdownRenderEnv {
+  function createRenderEnv(documentContext: Document | null = null): MarkdownRenderEnv {
     return {
       headingCounts: new Map<string, number>(),
-      nodeCounts: new Map<string, number>()
+      nodeCounts: new Map<string, number>(),
+      documentPath: documentContext?.path ?? ""
     };
   }
 
@@ -1816,6 +1836,77 @@
 
   function isExternalHref(pathPart: string) {
     return /^[a-z][a-z0-9+.-]*:/i.test(pathPart) && !pathPart.toLowerCase().startsWith("file:");
+  }
+
+  function resolveMarkdownImageSrc(src: string | null, env: MarkdownRenderEnv) {
+    if (!src || !env.documentPath || isExternalImageSrc(src)) {
+      return null;
+    }
+
+    const resolved = resolveLocalAssetPath(src, env.documentPath);
+    if (!resolved || !isTauri()) {
+      return null;
+    }
+
+    try {
+      return `${convertFileSrc(resolved.path)}${resolved.suffix}`;
+    } catch {
+      return null;
+    }
+  }
+
+  function isExternalImageSrc(src: string) {
+    const value = src.trim();
+    if (!value || value.startsWith("#")) {
+      return true;
+    }
+    if (/^(https?:|data:|blob:|asset:|tauri:)/i.test(value)) {
+      return true;
+    }
+    return /^[a-z][a-z0-9+.-]*:/i.test(value) && !value.toLowerCase().startsWith("file:");
+  }
+
+  function resolveLocalAssetPath(src: string, documentPath: string) {
+    const { pathPart, suffix } = splitAssetReference(src.trim());
+    if (!pathPart) {
+      return null;
+    }
+
+    let decodedPath = "";
+    if (pathPart.toLowerCase().startsWith("file:")) {
+      try {
+        decodedPath = normalizePathname(safeDecodeURIComponent(new URL(pathPart).pathname));
+      } catch {
+        return null;
+      }
+    } else {
+      decodedPath = normalizePathname(safeDecodeURIComponent(pathPart));
+    }
+
+    const normalizedPath = decodedPath.startsWith("/")
+      ? normalizeAbsolutePathSegments(decodedPath)
+      : normalizeAbsolutePathSegments(
+          `${documentPath.includes("/") ? documentPath.slice(0, documentPath.lastIndexOf("/")) : ""}/${decodedPath}`
+        );
+
+    return normalizedPath ? { path: normalizedPath, suffix } : null;
+  }
+
+  function splitAssetReference(value: string) {
+    const queryIndex = value.indexOf("?");
+    const hashIndex = value.indexOf("#");
+    const suffixIndex = [queryIndex, hashIndex]
+      .filter((index) => index >= 0)
+      .sort((left, right) => left - right)[0];
+
+    if (suffixIndex === undefined) {
+      return { pathPart: value, suffix: "" };
+    }
+
+    return {
+      pathPart: value.slice(0, suffixIndex),
+      suffix: value.slice(suffixIndex)
+    };
   }
 
   function resolveRepoRelativePath(pathPart: string) {

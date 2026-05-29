@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.15
+
+- Fixed local Markdown image rendering for relative image paths in memView.
+- Enabled the Tauri asset protocol so bundled app windows can display local SVG wireframes and other referenced images.
+
 ## v0.2.14
 
 - Added Git pull before repository re-indexing from the sidebar refresh button.

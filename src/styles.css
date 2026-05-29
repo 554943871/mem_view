@@ -1033,6 +1033,19 @@ h1 {
   text-decoration: underline;
 }
 
+.reader img {
+  max-width: 100%;
+  height: auto;
+}
+
+.reader p > img.reader-image:only-child {
+  display: block;
+  margin: 14px 0;
+  border: 1px solid #deded8;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
 .reader pre {
   overflow: auto;
   border: 1px solid #deded8;
