@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.17
+
+- Changed annotation export to create a temporary bundle directory with a README, structured JSON, and image evidence.
+- Added per-annotation visual evidence metadata and macOS region screenshots as an auxiliary source for Markdown and Mermaid annotation handling.
+- Updated the copied annotation prompt to point agents at the generated README first.
+
 ## v0.2.16
 
 - Moved annotation export work requirements into the temporary JSON bundle.

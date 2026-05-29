@@ -3,6 +3,7 @@
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
   import MarkdownIt from "markdown-it";
@@ -66,6 +67,7 @@
   };
   type ViewType = "repo" | "file";
   type CopyDiagramState = "idle" | "copying" | "copied" | "error";
+  const ANNOTATION_CAPTURE_PADDING = 24;
   type AnnotationSourceLines = { start: number; end: number };
   type AnnotationRect = {
     left: number;
@@ -85,6 +87,20 @@
     textExcerpt: string;
     intersectionRatio: number;
     isPrimary: boolean;
+  };
+  type AnnotationCaptureRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  type AnnotationCaptureStatus = "captured" | "unavailable";
+  type AnnotationVisualEvidence = {
+    screenshotPath: string | null;
+    capturePadding: number;
+    captureRect: AnnotationCaptureRect | null;
+    captureStatus: AnnotationCaptureStatus;
+    captureError: string | null;
   };
   type AnnotationDocumentMeta = {
     path: string;
@@ -120,11 +136,13 @@
         note: string;
         rect: AnnotationRect;
         coveredNodes: AnnotationCoveredNode[];
+        visualEvidence: AnnotationVisualEvidence;
       }>;
     }>;
   };
   type AnnotationExportResult = {
-    annotationFilePath: string;
+    annotationDirectoryPath: string;
+    readmePath: string;
     prompt: string;
   };
   type OpenView = {
@@ -695,6 +713,7 @@
   let annotationsByPath = new Map<string, AnnotationItem[]>();
   let editingAnnotationId = "";
   let annotationExporting = false;
+  let annotationCaptureHidden = false;
 
   $: t = messages[locale];
   $: activeView = getOpenView(activeViewId);
@@ -2412,25 +2431,35 @@
       return;
     }
 
-    const payload = buildAnnotationExportPayload(currentAnnotations);
     annotationExporting = true;
+    annotationCaptureHidden = true;
+    const previousEditingAnnotationId = editingAnnotationId;
+    editingAnnotationId = "";
     try {
+      await tick();
+      await nextAnimationFrame();
+      const payload = await buildAnnotationExportPayload(currentAnnotations);
       const result = await invoke<AnnotationExportResult>("finish_annotation_export", { payload });
       if (currentDocumentKey) {
         setAnnotationsForPath(currentDocumentKey, []);
       }
       annotationMode = false;
       editingAnnotationId = "";
-      showUpdateToast(`${t.annotationExported}: ${result.annotationFilePath}`);
+      showUpdateToast(`${t.annotationExported}: ${result.readmePath}`);
     } catch (err) {
+      editingAnnotationId = previousEditingAnnotationId;
       showUpdateToast(`${t.annotationExportFailed}: ${getErrorMessage(err)}`, "error");
     } finally {
+      annotationCaptureHidden = false;
       annotationExporting = false;
     }
   }
 
-  function buildAnnotationExportPayload(annotations: AnnotationItem[]): AnnotationExportPayload {
+  async function buildAnnotationExportPayload(
+    annotations: AnnotationItem[]
+  ): Promise<AnnotationExportPayload> {
     const document = annotations[0].document;
+    const visualEvidenceById = await buildAnnotationVisualEvidenceById(annotations);
 
     return {
       schemaVersion: "memView.annotation.v1",
@@ -2447,11 +2476,121 @@
             id: annotation.id,
             note: annotation.note.trim(),
             rect: annotation.rect,
-            coveredNodes: annotation.coveredNodes
+            coveredNodes: annotation.coveredNodes,
+            visualEvidence:
+              visualEvidenceById.get(annotation.id) ??
+              unavailableAnnotationVisualEvidence("未能计算截图区域")
           }))
         }
       ]
     };
+  }
+
+  async function buildAnnotationVisualEvidenceById(annotations: AnnotationItem[]) {
+    const evidenceById = new Map<string, AnnotationVisualEvidence>();
+    if (!isTauri()) {
+      for (const annotation of annotations) {
+        evidenceById.set(
+          annotation.id,
+          unavailableAnnotationVisualEvidence("当前不是桌面应用环境，未生成截图")
+        );
+      }
+      return evidenceById;
+    }
+    if (!readerElement) {
+      for (const annotation of annotations) {
+        evidenceById.set(annotation.id, unavailableAnnotationVisualEvidence("reader 不可用"));
+      }
+      return evidenceById;
+    }
+
+    try {
+      const [webviewPosition, scaleFactor] = await Promise.all([
+        getCurrentWebview().position(),
+        getCurrentWindow().scaleFactor()
+      ]);
+      for (const annotation of annotations) {
+        const captureRect = getAnnotationScreenCaptureRect(
+          annotation.rect,
+          webviewPosition.x,
+          webviewPosition.y,
+          scaleFactor
+        );
+        evidenceById.set(
+          annotation.id,
+          captureRect
+            ? {
+                screenshotPath: null,
+                capturePadding: ANNOTATION_CAPTURE_PADDING,
+                captureRect,
+                captureStatus: "unavailable",
+                captureError: null
+              }
+            : unavailableAnnotationVisualEvidence(
+                "标注区域不在当前可见 reader 视口内，未生成截图"
+              )
+        );
+      }
+    } catch (err) {
+      const message = `计算截图区域失败：${getErrorMessage(err)}`;
+      for (const annotation of annotations) {
+        evidenceById.set(annotation.id, unavailableAnnotationVisualEvidence(message));
+      }
+    }
+
+    return evidenceById;
+  }
+
+  function unavailableAnnotationVisualEvidence(message: string): AnnotationVisualEvidence {
+    return {
+      screenshotPath: null,
+      capturePadding: ANNOTATION_CAPTURE_PADDING,
+      captureRect: null,
+      captureStatus: "unavailable",
+      captureError: message
+    };
+  }
+
+  function getAnnotationScreenCaptureRect(
+    rect: AnnotationRect,
+    webviewX: number,
+    webviewY: number,
+    scaleFactor: number
+  ): AnnotationCaptureRect | null {
+    if (!readerElement) {
+      return null;
+    }
+
+    const readerBounds = readerElement.getBoundingClientRect();
+    const left = readerBounds.left + rect.left - readerElement.scrollLeft;
+    const top = readerBounds.top + rect.top - readerElement.scrollTop;
+    const paddedLeft = left - ANNOTATION_CAPTURE_PADDING;
+    const paddedTop = top - ANNOTATION_CAPTURE_PADDING;
+    const paddedRight = left + rect.width + ANNOTATION_CAPTURE_PADDING;
+    const paddedBottom = top + rect.height + ANNOTATION_CAPTURE_PADDING;
+    const clipLeft = Math.max(paddedLeft, readerBounds.left, 0);
+    const clipTop = Math.max(paddedTop, readerBounds.top, 0);
+    const clipRight = Math.min(paddedRight, readerBounds.right, window.innerWidth);
+    const clipBottom = Math.min(paddedBottom, readerBounds.bottom, window.innerHeight);
+    const width = clipRight - clipLeft;
+    const height = clipBottom - clipTop;
+
+    if (width < 1 || height < 1) {
+      return null;
+    }
+
+    return {
+      x: Math.round(webviewX + clipLeft * scaleFactor),
+      y: Math.round(webviewY + clipTop * scaleFactor),
+      width: Math.max(1, Math.round(width * scaleFactor)),
+      height: Math.max(1, Math.round(height * scaleFactor))
+    };
+  }
+
+  function nextAnimationFrame() {
+    return new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
   }
 
   function getCurrentAnnotationDocumentMeta(): AnnotationDocumentMeta {
@@ -3587,6 +3726,7 @@
         <article
           class="reader"
           class:annotating={annotationMode}
+          class:capturing={annotationCaptureHidden}
           bind:this={readerElement}
           on:pointerdown={handleReaderPointerDown}
           on:pointermove={handleReaderPointerMove}

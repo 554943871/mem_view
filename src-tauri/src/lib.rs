@@ -106,6 +106,7 @@ struct AnnotationItem {
     note: String,
     rect: AnnotationRect,
     covered_nodes: Vec<AnnotationCoveredNode>,
+    visual_evidence: Option<AnnotationVisualEvidence>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -141,25 +142,50 @@ struct AnnotationSourceLines {
     end: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct AnnotationExportResult {
-    annotation_file_path: String,
-    prompt: String,
+struct AnnotationVisualEvidence {
+    screenshot_path: Option<String>,
+    capture_padding: f64,
+    capture_rect: Option<AnnotationCaptureRect>,
+    capture_status: AnnotationCaptureStatus,
+    capture_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationCaptureRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+enum AnnotationCaptureStatus {
+    Captured,
+    Unavailable,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AnnotationExportFile<'a> {
-    task: &'static str,
-    work_requirements: &'static [&'static str],
-    #[serde(flatten)]
-    payload: &'a AnnotationExportPayload,
+struct AnnotationExportResult {
+    annotation_directory_path: String,
+    readme_path: String,
+    prompt: String,
+}
+
+#[allow(dead_code)]
+struct AnnotationBundlePaths {
+    directory_path: PathBuf,
+    annotations_path: PathBuf,
+    readme_path: PathBuf,
 }
 
 const ANNOTATION_EXPORT_TASK: &str = "根据 memView 标注处理对应 Markdown 规格文档。";
 const ANNOTATION_EXPORT_WORK_REQUIREMENTS: &[&str] = &[
-    "先读取并理解本 JSON 文件中的 task、workRequirements、documents[].path、annotations[].note、coveredNodes 和 rect。",
+    "先读取本 README.md，再理解 annotations.json 中的 documents[].path、annotations[].note、coveredNodes、rect 和 visualEvidence。",
     "再读取 documents[].path 指向的原 Markdown 文件。",
     "优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位标注对应的规格内容；rect 只作为视觉辅助，不要只凭坐标判断。",
     "对每条 annotations[].note 先判断意图：如果 note 明确要求修正、补充、删除、改写或同步规格内容，才按该要求做最小范围修改。",
@@ -300,36 +326,201 @@ fn copy_svg_to_clipboard(image: ClipboardSvg) -> Result<(), String> {
 fn finish_annotation_export(
     payload: AnnotationExportPayload,
 ) -> Result<AnnotationExportResult, String> {
-    let annotation_file_path = write_annotation_export(&payload)?;
-    let annotation_file_path_string = annotation_file_path.to_string_lossy().to_string();
-    let prompt = build_annotation_prompt(&annotation_file_path_string);
+    let bundle_paths = write_annotation_export(payload)?;
+    let readme_path_string = bundle_paths.readme_path.to_string_lossy().to_string();
+    let prompt = build_annotation_prompt(&readme_path_string);
     copy_text_to_clipboard(&prompt)?;
 
     Ok(AnnotationExportResult {
-        annotation_file_path: annotation_file_path_string,
+        annotation_directory_path: bundle_paths.directory_path.to_string_lossy().to_string(),
+        readme_path: readme_path_string,
         prompt,
     })
 }
 
-fn write_annotation_export(payload: &AnnotationExportPayload) -> Result<PathBuf, String> {
-    validate_annotation_export(payload)?;
-    let path = annotation_temp_file_path(&std::env::temp_dir(), unix_timestamp_millis());
-    write_annotation_export_to_path(payload, &path)?;
-    Ok(path)
+fn write_annotation_export(
+    mut payload: AnnotationExportPayload,
+) -> Result<AnnotationBundlePaths, String> {
+    validate_annotation_export(&payload)?;
+    let directory_path = annotation_temp_dir_path(&std::env::temp_dir(), unix_timestamp_millis());
+    let images_path = directory_path.join("images");
+    fs::create_dir_all(&images_path)
+        .map_err(|err| format!("创建标注临时目录失败：{} ({})", images_path.display(), err))?;
+
+    finalize_annotation_visual_evidence(&mut payload, &images_path);
+
+    let annotations_path = directory_path.join("annotations.json");
+    write_annotation_export_to_path(&payload, &annotations_path)?;
+
+    let readme_path = directory_path.join("README.md");
+    let readme = build_annotation_readme(&payload, &annotations_path, &images_path);
+    fs::write(&readme_path, readme)
+        .map_err(|err| format!("写入标注说明文件失败：{} ({})", readme_path.display(), err))?;
+
+    Ok(AnnotationBundlePaths {
+        directory_path,
+        annotations_path,
+        readme_path,
+    })
 }
 
 fn write_annotation_export_to_path(
     payload: &AnnotationExportPayload,
     path: &Path,
 ) -> Result<(), String> {
-    let export_file = AnnotationExportFile {
-        task: ANNOTATION_EXPORT_TASK,
-        work_requirements: ANNOTATION_EXPORT_WORK_REQUIREMENTS,
-        payload,
-    };
-    let json = serde_json::to_string_pretty(&export_file)
+    let json = serde_json::to_string_pretty(payload)
         .map_err(|err| format!("序列化标注文件失败：{}", err))?;
-    fs::write(path, json).map_err(|err| format!("写入标注临时文件失败：{} ({})", path.display(), err))
+    fs::write(path, json)
+        .map_err(|err| format!("写入标注临时文件失败：{} ({})", path.display(), err))
+}
+
+fn finalize_annotation_visual_evidence(payload: &mut AnnotationExportPayload, images_path: &Path) {
+    let mut index = 0usize;
+    for annotation in payload
+        .documents
+        .iter_mut()
+        .flat_map(|document| document.annotations.iter_mut())
+    {
+        let mut evidence = annotation
+            .visual_evidence
+            .take()
+            .unwrap_or_else(|| unavailable_visual_evidence(None, 0.0, "前端未提供截图区域"));
+        evidence.screenshot_path = None;
+        evidence.capture_status = AnnotationCaptureStatus::Unavailable;
+
+        if let Some(capture_rect) = evidence.capture_rect.clone() {
+            let file_name = annotation_image_file_name(&annotation.id, index);
+            let screenshot_path = images_path.join(file_name);
+            match capture_screen_region_to_png(&capture_rect, &screenshot_path) {
+                Ok(()) => {
+                    evidence.screenshot_path = Some(screenshot_path.to_string_lossy().to_string());
+                    evidence.capture_status = AnnotationCaptureStatus::Captured;
+                    evidence.capture_error = None;
+                }
+                Err(err) => {
+                    evidence.capture_error = Some(err);
+                }
+            }
+        } else if evidence.capture_error.is_none() {
+            evidence.capture_error =
+                Some("标注区域不在当前可见 reader 视口内，未生成截图".to_string());
+        }
+
+        annotation.visual_evidence = Some(evidence);
+        index += 1;
+    }
+}
+
+fn unavailable_visual_evidence(
+    capture_rect: Option<AnnotationCaptureRect>,
+    capture_padding: f64,
+    capture_error: impl Into<String>,
+) -> AnnotationVisualEvidence {
+    AnnotationVisualEvidence {
+        screenshot_path: None,
+        capture_padding,
+        capture_rect,
+        capture_status: AnnotationCaptureStatus::Unavailable,
+        capture_error: Some(capture_error.into()),
+    }
+}
+
+fn annotation_image_file_name(annotation_id: &str, index: usize) -> String {
+    let sanitized: String = annotation_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stem = if sanitized.trim_matches('_').is_empty() {
+        format!("annotation-{}", index + 1)
+    } else {
+        sanitized
+    };
+    format!("{}.png", stem)
+}
+
+fn build_annotation_readme(
+    payload: &AnnotationExportPayload,
+    annotations_path: &Path,
+    images_path: &Path,
+) -> String {
+    let annotation_count: usize = payload
+        .documents
+        .iter()
+        .map(|document| document.annotations.len())
+        .sum();
+    let document_list = payload
+        .documents
+        .iter()
+        .map(|document| {
+            format!(
+                "- `{}`：{} 条标注",
+                document.path,
+                document.annotations.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let work_requirements = ANNOTATION_EXPORT_WORK_REQUIREMENTS
+        .iter()
+        .enumerate()
+        .map(|(index, requirement)| format!("{}. {}", index + 1, requirement))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"# memView 标注任务
+
+{task}
+
+## 文件
+
+- 结构化数据：`{annotations_path}`
+- 局部截图目录：`{images_path}`
+- 文档数量：{document_count}
+- 标注数量：{annotation_count}
+
+## 待处理文档
+
+{document_list}
+
+## 工作要求
+
+{work_requirements}
+
+## 字段说明
+
+- `documents[].path`：被标注的原 Markdown 文档绝对路径，处理前必须读取。
+- `annotations[].note`：用户写下的标注意图原文，它是判断要修改、回答还是确认的最高优先级输入。
+- `annotations[].coveredNodes`：memView 根据框选区域推断出的候选文档节点，不是绝对真相。
+- `coveredNodes[].sourceLines`、`textExcerpt`、`headingPath`：优先用于定位 Markdown 源文；优先级高于截图。
+- `annotations[].rect`：用户框选区域在 reader 内容坐标系里的位置，不是屏幕坐标。
+- `annotations[].visualEvidence`：截图辅助信息。`screenshotPath` 指向局部 PNG；`captureRect` 是生成截图时使用的屏幕坐标；`captureStatus` 为 `captured` 才表示截图可用。
+
+## 视觉证据使用原则
+
+- 截图只用于确认视觉上下文，不能替代 Markdown 源文和 `sourceLines`。
+- Mermaid、表格、图片等复杂排版场景，可以用截图和图内文字判断用户实际框选的局部。
+- Mermaid 的源码修改仍以 Markdown 中的 Mermaid 代码块为准；截图只是帮助判断具体节点、边或说明文字。
+- 如果 `captureStatus` 是 `unavailable`，忽略截图并根据 `note`、`coveredNodes` 和原文处理。
+"#,
+        task = ANNOTATION_EXPORT_TASK,
+        annotations_path = annotations_path.display(),
+        images_path = images_path.display(),
+        document_count = payload.documents.len(),
+        annotation_count = annotation_count,
+        document_list = if document_list.is_empty() {
+            "- 无".to_string()
+        } else {
+            document_list
+        },
+        work_requirements = work_requirements
+    )
 }
 
 fn validate_annotation_export(payload: &AnnotationExportPayload) -> Result<(), String> {
@@ -361,18 +552,18 @@ fn validate_annotation_export(payload: &AnnotationExportPayload) -> Result<(), S
     Ok(())
 }
 
-fn annotation_temp_file_path(base: &Path, timestamp_millis: u128) -> PathBuf {
+fn annotation_temp_dir_path(base: &Path, timestamp_millis: u128) -> PathBuf {
     base.join(format!(
-        "mem-view-annotations-{}-{}.json",
+        "mem-view-annotations-{}-{}",
         std::process::id(),
         timestamp_millis
     ))
 }
 
-fn build_annotation_prompt(annotation_file_path: &str) -> String {
+fn build_annotation_prompt(readme_path: &str) -> String {
     format!(
-        "请读取并严格执行 memView 标注临时文件中的任务说明：\n{}\n\n先理解文件里的 workRequirements 和标注数据，再处理对应 Markdown 文档。",
-        annotation_file_path
+        "请先读取并严格执行 memView 标注目录中的 README.md：\n{}\n\n再结合同目录 annotations.json 和 images/ 里的截图证据处理对应 Markdown 文档。",
+        readme_path
     )
 }
 
@@ -382,6 +573,55 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|err| format!("写入系统剪贴板失败：{}", err))
+}
+
+#[cfg(target_os = "macos")]
+fn capture_screen_region_to_png(rect: &AnnotationCaptureRect, path: &Path) -> Result<(), String> {
+    let region = screencapture_region_arg(rect)?;
+    let output = Command::new("screencapture")
+        .arg("-x")
+        .arg("-R")
+        .arg(region)
+        .arg(path)
+        .output()
+        .map_err(|err| format!("调用系统截图失败：{}", err))?;
+
+    if output.status.success() && path.exists() {
+        return Ok(());
+    }
+
+    let _ = fs::remove_file(path);
+    let detail = command_output_text(&output.stdout, &output.stderr);
+    if detail.is_empty() {
+        Err("系统截图失败，可能缺少屏幕录制权限".to_string())
+    } else {
+        Err(format!("系统截图失败：{}", detail))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_screen_region_to_png(_rect: &AnnotationCaptureRect, _path: &Path) -> Result<(), String> {
+    Err("当前平台暂不支持自动截图".to_string())
+}
+
+fn screencapture_region_arg(rect: &AnnotationCaptureRect) -> Result<String, String> {
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width < 1.0
+        || rect.height < 1.0
+    {
+        return Err("截图区域无效".to_string());
+    }
+
+    Ok(format!(
+        "{},{},{},{}",
+        rect.x.round() as i64,
+        rect.y.round() as i64,
+        rect.width.round().max(1.0) as u64,
+        rect.height.round().max(1.0) as u64
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -969,9 +1209,9 @@ mod tests {
     }
 
     #[test]
-    fn builds_annotation_temp_file_path_with_expected_name() {
+    fn builds_annotation_temp_dir_path_with_expected_name() {
         let base = PathBuf::from("/tmp");
-        let path = annotation_temp_file_path(&base, 12345);
+        let path = annotation_temp_dir_path(&base, 12345);
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -979,29 +1219,47 @@ mod tests {
 
         assert_eq!(path.parent(), Some(base.as_path()));
         assert!(file_name.starts_with("mem-view-annotations-"));
-        assert!(file_name.ends_with("-12345.json"));
+        assert!(file_name.ends_with("-12345"));
     }
 
     #[test]
-    fn writes_annotation_file_with_requirements_and_short_prompt() {
-        let root = build_temp_dir("annotation-export");
-        fs::create_dir_all(&root).expect("annotation temp dir should create");
-        let path = root.join("annotations.json");
+    fn writes_annotation_bundle_with_readme_json_and_visual_evidence() {
         let payload = build_annotation_payload();
 
-        write_annotation_export_to_path(&payload, &path).expect("annotation file should write");
-        let prompt = build_annotation_prompt(&path.to_string_lossy());
-        let json = fs::read_to_string(&path).expect("annotation file should be readable");
+        let bundle = write_annotation_export(payload).expect("annotation bundle should write");
+        let prompt = build_annotation_prompt(&bundle.readme_path.to_string_lossy());
+        let readme = fs::read_to_string(&bundle.readme_path).expect("README should be readable");
+        let json = fs::read_to_string(&bundle.annotations_path)
+            .expect("annotation JSON should be readable");
 
+        assert!(bundle.directory_path.starts_with(std::env::temp_dir()));
+        assert_eq!(
+            bundle
+                .annotations_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("annotations.json")
+        );
+        assert_eq!(
+            bundle.readme_path.file_name().and_then(|name| name.to_str()),
+            Some("README.md")
+        );
+        assert!(bundle.directory_path.join("images").is_dir());
+        assert!(readme.contains("note`：用户写下的标注意图原文"));
+        assert!(readme.contains("coveredNodes`：memView 根据框选区域推断出的候选文档节点"));
+        assert!(readme.contains("sourceLines`、`textExcerpt`、`headingPath`：优先用于定位"));
+        assert!(readme.contains("截图只用于确认视觉上下文"));
+        assert!(readme.contains("Mermaid 的源码修改仍以 Markdown 中的 Mermaid 代码块为准"));
         assert!(json.contains("需要补充边界条件"));
-        assert!(json.contains("\"workRequirements\""));
-        assert!(json.contains("不要为了回答问题而改文档"));
+        assert!(json.contains("\"visualEvidence\""));
+        assert!(json.contains("\"captureStatus\": \"unavailable\""));
+        assert!(json.contains("\"captureError\""));
         assert!(json.contains("sourceLines"));
         assert!(json.contains("documents"));
-        assert!(prompt.contains(&path.to_string_lossy().to_string()));
-        assert!(prompt.contains("workRequirements"));
+        assert!(prompt.contains(&bundle.readme_path.to_string_lossy().to_string()));
+        assert!(prompt.contains("annotations.json"));
+        assert!(!prompt.contains("coveredNodes"));
         assert!(!prompt.contains("sourceLines"));
-        assert!(!prompt.contains("不要改文件"));
     }
 
     #[test]
@@ -1048,6 +1306,11 @@ mod tests {
                         intersection_ratio: 0.7,
                         is_primary: true,
                     }],
+                    visual_evidence: Some(unavailable_visual_evidence(
+                        None,
+                        24.0,
+                        "测试环境不生成截图",
+                    )),
                 }],
             }],
         }
