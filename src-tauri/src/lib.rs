@@ -4,18 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
-}
 
 #[derive(Debug, Serialize)]
 struct RepoSnapshot {
@@ -30,22 +22,6 @@ struct RepoSnapshot {
 struct GitPullResult {
     root_path: String,
     message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SystemPermissionReport {
-    screen_recording: SystemPermissionCheck,
-    clipboard: SystemPermissionCheck,
-    network: SystemPermissionCheck,
-}
-
-#[derive(Debug, Serialize)]
-struct SystemPermissionCheck {
-    status: String,
-    required: bool,
-    can_request: bool,
-    needs_restart: bool,
-    detail: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -273,42 +249,6 @@ fn pull_repo(repo_path: String) -> Result<GitPullResult, String> {
             message
         };
         Err(format!("git pull --ff-only 执行失败：\n{}", detail))
-    }
-}
-
-#[tauri::command]
-fn check_system_permissions(request_screen_recording: bool) -> SystemPermissionReport {
-    SystemPermissionReport {
-        screen_recording: screen_recording_permission(request_screen_recording),
-        clipboard: clipboard_permission(),
-        network: network_access_check(),
-    }
-}
-
-#[tauri::command]
-fn open_screen_recording_settings() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let output = Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-            .output()
-            .map_err(|err| format!("打开系统设置失败：{}", err))?;
-
-        if output.status.success() {
-            return Ok(());
-        }
-
-        let detail = command_output_text(&output.stdout, &output.stderr);
-        if detail.is_empty() {
-            Err("打开系统设置失败".to_string())
-        } else {
-            Err(format!("打开系统设置失败：{}", detail))
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("当前平台没有屏幕录制隐私设置".to_string())
     }
 }
 
@@ -647,167 +587,6 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|err| format!("写入系统剪贴板失败：{}", err))
-}
-
-#[cfg(target_os = "macos")]
-fn screen_recording_permission(request: bool) -> SystemPermissionCheck {
-    let already_granted = unsafe { CGPreflightScreenCaptureAccess() };
-    if already_granted {
-        return permission_check(
-            "granted",
-            true,
-            false,
-            false,
-            "屏幕录制权限已授权",
-        );
-    }
-
-    if probe_screen_capture_access().is_ok() {
-        return permission_check(
-            "granted",
-            true,
-            false,
-            false,
-            "屏幕录制截图能力可用；系统预检未命中，但实际截图测试通过",
-        );
-    }
-
-    if request {
-        let granted = unsafe { CGRequestScreenCaptureAccess() };
-        if granted {
-            return permission_check(
-                "granted",
-                true,
-                false,
-                true,
-                "屏幕录制权限已授权；macOS 可能需要重启应用后才会让截图能力完全生效",
-            );
-        }
-
-        if probe_screen_capture_access().is_ok() {
-            return permission_check(
-                "granted",
-                true,
-                false,
-                false,
-                "屏幕录制截图能力可用；系统授权状态刷新较慢，已按实际能力放行",
-            );
-        }
-    }
-
-    permission_check(
-        "missing",
-        true,
-        true,
-        false,
-        "屏幕录制权限未授权，标注导出时无法自动生成截图证据",
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn probe_screen_capture_access() -> Result<(), String> {
-    let path = std::env::temp_dir().join(format!(
-        "mem-view-screen-permission-{}-{}.png",
-        std::process::id(),
-        unix_timestamp_nanos()
-    ));
-    let rect = AnnotationCaptureRect {
-        x: 0.0,
-        y: 0.0,
-        width: 1.0,
-        height: 1.0,
-    };
-    let result = capture_screen_region_to_png(&rect, &path);
-    let _ = fs::remove_file(&path);
-    result
-}
-
-#[cfg(not(target_os = "macos"))]
-fn screen_recording_permission(_request: bool) -> SystemPermissionCheck {
-    permission_check(
-        "not_required",
-        false,
-        false,
-        false,
-        "当前平台不需要 macOS 屏幕录制权限",
-    )
-}
-
-fn clipboard_permission() -> SystemPermissionCheck {
-    match Clipboard::new() {
-        Ok(_) => permission_check(
-            "granted",
-            false,
-            false,
-            false,
-            "系统剪贴板可用；写入剪贴板通常不需要预授权",
-        ),
-        Err(err) => permission_check(
-            "unavailable",
-            false,
-            false,
-            false,
-            format!("系统剪贴板当前不可用：{}", err),
-        ),
-    }
-}
-
-fn network_access_check() -> SystemPermissionCheck {
-    let addresses = match ("github.com", 443).to_socket_addrs() {
-        Ok(addresses) => addresses,
-        Err(err) => {
-            return permission_check(
-                "unavailable",
-                false,
-                false,
-                false,
-                format!("无法解析 GitHub 地址：{}", err),
-            );
-        }
-    };
-    let timeout = Duration::from_millis(900);
-    let mut last_error = None;
-
-    for address in addresses.take(4) {
-        match TcpStream::connect_timeout(&address, timeout) {
-            Ok(_) => {
-                return permission_check(
-                    "granted",
-                    false,
-                    false,
-                    false,
-                    "GitHub 网络连通性正常",
-                );
-            }
-            Err(err) => last_error = Some(err.to_string()),
-        }
-    }
-
-    permission_check(
-        "unavailable",
-        false,
-        false,
-        false,
-        last_error
-            .map(|err| format!("无法连接 GitHub 更新端点：{}", err))
-            .unwrap_or_else(|| "无法连接 GitHub 更新端点".to_string()),
-    )
-}
-
-fn permission_check(
-    status: impl Into<String>,
-    required: bool,
-    can_request: bool,
-    needs_restart: bool,
-    detail: impl Into<String>,
-) -> SystemPermissionCheck {
-    SystemPermissionCheck {
-        status: status.into(),
-        required,
-        can_request,
-        needs_restart,
-        detail: detail.into(),
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1387,8 +1166,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_repo,
             pull_repo,
-            check_system_permissions,
-            open_screen_recording_settings,
             read_document,
             read_standalone_document,
             read_markdown_file,

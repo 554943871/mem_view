@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "mem-view"
-version = "0.2.22"
+version = "0.2.23"
 dependencies = [
  "arboard",
  "base64 0.22.1",

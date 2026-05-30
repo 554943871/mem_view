@@ -194,21 +194,6 @@
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "syncing" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
-  type SystemPermissionStatus = "granted" | "missing" | "not_required" | "unavailable" | string;
-  type SystemPermissionId = "screen_recording" | "clipboard" | "network";
-  type SystemPermissionCheck = {
-    status: SystemPermissionStatus;
-    required: boolean;
-    can_request: boolean;
-    needs_restart: boolean;
-    detail: string;
-  };
-  type SystemPermissionReport = Record<SystemPermissionId, SystemPermissionCheck>;
-  type SystemPermissionRow = {
-    id: SystemPermissionId;
-    label: string;
-    check: SystemPermissionCheck;
-  };
   type CheckUpdateOptions = {
     notifyNoUpdate?: boolean;
     notifyError?: boolean;
@@ -311,26 +296,6 @@
     pullFailed: string;
     editAnnotation: string;
     deleteAnnotation: string;
-    systemPermissions: string;
-    systemPermissionsIntro: string;
-    checkingSystemPermissions: string;
-    systemPermissionsReady: string;
-    systemPermissionsNeedAttention: string;
-    systemPermissionsCheckFailed: string;
-    permissionScreenRecording: string;
-    permissionClipboard: string;
-    permissionNetwork: string;
-    permissionGranted: string;
-    permissionMissing: string;
-    permissionUnavailable: string;
-    permissionNotRequired: string;
-    permissionUnknown: string;
-    requestScreenRecording: string;
-    openPrivacySettings: string;
-    recheckPermissions: string;
-    restartApp: string;
-    dismissPermissions: string;
-    permissionRestartHint: string;
     status: Record<StatusKey, string>;
     kinds: Record<string, string>;
     chainLabels: Record<string, string>;
@@ -443,26 +408,6 @@
       pullFailed: "Git 拉取失败",
       editAnnotation: "编辑标注备注",
       deleteAnnotation: "删除标注",
-      systemPermissions: "系统能力检查",
-      systemPermissionsIntro: "memView 启动时会预检标注截图、剪贴板和更新网络，避免用到功能时才发现缺权限。",
-      checkingSystemPermissions: "正在检查系统能力",
-      systemPermissionsReady: "系统能力已就绪",
-      systemPermissionsNeedAttention: "有系统能力需要处理",
-      systemPermissionsCheckFailed: "系统能力检查失败",
-      permissionScreenRecording: "屏幕录制",
-      permissionClipboard: "剪贴板",
-      permissionNetwork: "网络访问",
-      permissionGranted: "正常",
-      permissionMissing: "未授权",
-      permissionUnavailable: "不可用",
-      permissionNotRequired: "无需授权",
-      permissionUnknown: "未知",
-      requestScreenRecording: "申请屏幕录制权限",
-      openPrivacySettings: "打开隐私设置",
-      recheckPermissions: "重新检查",
-      restartApp: "重启应用",
-      dismissPermissions: "稍后处理",
-      permissionRestartHint: "授权后 macOS 可能需要重启 memView 才能让截图能力完全生效。",
       status: {
         idle: "待选择",
         loading: "加载中",
@@ -594,26 +539,6 @@
       pullFailed: "Git pull failed",
       editAnnotation: "Edit annotation note",
       deleteAnnotation: "Delete annotation",
-      systemPermissions: "System Checks",
-      systemPermissionsIntro: "memView checks screenshot capture, clipboard, and update networking at startup so permission problems do not interrupt the current workflow later.",
-      checkingSystemPermissions: "Checking system capabilities",
-      systemPermissionsReady: "System capabilities are ready",
-      systemPermissionsNeedAttention: "Some system capabilities need attention",
-      systemPermissionsCheckFailed: "System capability check failed",
-      permissionScreenRecording: "Screen Recording",
-      permissionClipboard: "Clipboard",
-      permissionNetwork: "Network Access",
-      permissionGranted: "OK",
-      permissionMissing: "Missing",
-      permissionUnavailable: "Unavailable",
-      permissionNotRequired: "Not required",
-      permissionUnknown: "Unknown",
-      requestScreenRecording: "Request Screen Recording",
-      openPrivacySettings: "Open Privacy Settings",
-      recheckPermissions: "Check Again",
-      restartApp: "Relaunch App",
-      dismissPermissions: "Later",
-      permissionRestartHint: "After granting access, macOS may require relaunching memView before screenshots work fully.",
       status: {
         idle: "Choose Repo",
         loading: "Loading",
@@ -824,10 +749,6 @@
   let updateToastMessage = "";
   let updateToastTone: ToastTone = "info";
   let updateToastTimer: number | null = null;
-  let systemPermissionReport: SystemPermissionReport | null = null;
-  let systemPermissionDialogOpen = false;
-  let systemPermissionChecking = false;
-  let systemPermissionRequesting = false;
   let repoPath = getInitialRepoPath();
   let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
   let activeViewId = openViews[0]?.id ?? "";
@@ -884,9 +805,6 @@
   $: updateBusy = updateState !== "idle";
   $: updateInstalling = updateState === "downloading" || updateState === "installing";
   $: renderedUpdateNotes = renderUpdateNotes(pendingUpdateNotes);
-  $: systemPermissionRows = getSystemPermissionRows(systemPermissionReport, t);
-  $: systemPermissionNeedsAttention = hasSystemPermissionIssues(systemPermissionReport);
-  $: systemPermissionNeedsRestart = needsSystemPermissionRestart(systemPermissionReport);
   $: flatTree = snapshot ? flattenTree(snapshot.tree, 0, collapsedFolderIds) : [];
   $: visibleNodes = snapshot
     ? query.trim()
@@ -933,7 +851,6 @@
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("beforeunload", handleBeforeUnload);
     void setupDragDrop();
-    void checkSystemPermissions({ openWhenNeedsAttention: true });
     void checkForUpdates({ notifyNoUpdate: false, notifyError: false });
     const initialPath = repoPath || selectedRecentRepoPath;
     if (initialPath) {
@@ -1516,122 +1433,6 @@
       updateToastMessage = "";
       updateToastTimer = null;
     }, 2600);
-  }
-
-  async function checkSystemPermissions(
-    options: {
-      requestScreenRecording?: boolean;
-      openWhenNeedsAttention?: boolean;
-      notifyWhenReady?: boolean;
-    } = {}
-  ) {
-    if (!isTauri()) {
-      return;
-    }
-
-    systemPermissionChecking = true;
-    if (options.requestScreenRecording) {
-      systemPermissionRequesting = true;
-    }
-
-    try {
-      const report = await invoke<SystemPermissionReport>("check_system_permissions", {
-        requestScreenRecording: Boolean(options.requestScreenRecording)
-      });
-      systemPermissionReport = report;
-      const hasIssues = hasSystemPermissionIssues(report);
-      if (hasIssues && options.openWhenNeedsAttention) {
-        systemPermissionDialogOpen = true;
-      }
-      if (!hasIssues && options.notifyWhenReady) {
-        showUpdateToast(t.systemPermissionsReady);
-      }
-      if (hasIssues && options.requestScreenRecording) {
-        showUpdateToast(t.systemPermissionsNeedAttention, "error");
-      }
-    } catch (err) {
-      console.warn("System permission check failed", err);
-      if (options.openWhenNeedsAttention || options.notifyWhenReady) {
-        showUpdateToast(`${t.systemPermissionsCheckFailed}: ${getErrorMessage(err)}`, "error");
-      }
-    } finally {
-      systemPermissionChecking = false;
-      systemPermissionRequesting = false;
-    }
-  }
-
-  async function requestScreenRecordingPermission() {
-    await checkSystemPermissions({
-      requestScreenRecording: true,
-      openWhenNeedsAttention: true,
-      notifyWhenReady: true
-    });
-  }
-
-  async function openScreenRecordingPrivacySettings() {
-    try {
-      await invoke<void>("open_screen_recording_settings");
-    } catch (err) {
-      console.warn("Open screen recording settings failed", err);
-      showUpdateToast(`${t.systemPermissionsCheckFailed}: ${getErrorMessage(err)}`, "error");
-    }
-  }
-
-  function getSystemPermissionRows(
-    report: SystemPermissionReport | null,
-    labels: MessagePack
-  ): SystemPermissionRow[] {
-    if (!report) {
-      return [];
-    }
-
-    return [
-      { id: "screen_recording", label: labels.permissionScreenRecording, check: report.screen_recording },
-      { id: "clipboard", label: labels.permissionClipboard, check: report.clipboard },
-      { id: "network", label: labels.permissionNetwork, check: report.network }
-    ];
-  }
-
-  function hasSystemPermissionIssues(report: SystemPermissionReport | null) {
-    return getSystemPermissionChecks(report).some((check) =>
-      check.status === "missing" || check.status === "unavailable"
-    );
-  }
-
-  function needsSystemPermissionRestart(report: SystemPermissionReport | null) {
-    return getSystemPermissionChecks(report).some((check) => check.needs_restart);
-  }
-
-  function getSystemPermissionChecks(report: SystemPermissionReport | null) {
-    return report ? [report.screen_recording, report.clipboard, report.network] : [];
-  }
-
-  function formatSystemPermissionStatus(status: SystemPermissionStatus) {
-    switch (status) {
-      case "granted":
-        return t.permissionGranted;
-      case "missing":
-        return t.permissionMissing;
-      case "unavailable":
-        return t.permissionUnavailable;
-      case "not_required":
-        return t.permissionNotRequired;
-      default:
-        return t.permissionUnknown;
-    }
-  }
-
-  function systemPermissionStatusClass(status: SystemPermissionStatus) {
-    if (status === "granted" || status === "not_required") {
-      return "ok";
-    }
-    if (status === "missing") {
-      return "missing";
-    }
-    if (status === "unavailable") {
-      return "unavailable";
-    }
-    return "unknown";
   }
 
   async function copyCurrentDocumentPath() {
@@ -5027,81 +4828,6 @@
         {updateToastTone === "error" ? "!" : ""}
       </span>
       <span>{updateToastMessage}</span>
-    </div>
-  {/if}
-
-  {#if systemPermissionDialogOpen && systemPermissionReport}
-    <div class="permission-modal" role="dialog" aria-modal="true" aria-label={t.systemPermissions}>
-      <section class="permission-dialog">
-        <div class="permission-dialog-head">
-          <div>
-            <div class="eyebrow">{t.systemPermissions}</div>
-            <h2>{systemPermissionNeedsAttention ? t.systemPermissionsNeedAttention : t.systemPermissionsReady}</h2>
-            <p>{t.systemPermissionsIntro}</p>
-          </div>
-          <button
-            class="ghost icon-button"
-            type="button"
-            aria-label={t.dismissPermissions}
-            title={t.dismissPermissions}
-            on:click={() => (systemPermissionDialogOpen = false)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div class="permission-list">
-          {#each systemPermissionRows as row}
-            <div class="permission-row">
-              <div class="permission-row-main">
-                <strong>{row.label}</strong>
-                <p>{row.check.detail}</p>
-                {#if row.check.needs_restart}
-                  <p class="permission-restart-hint">{t.permissionRestartHint}</p>
-                {/if}
-              </div>
-              <span class={`permission-state ${systemPermissionStatusClass(row.check.status)}`}>
-                {formatSystemPermissionStatus(row.check.status)}
-              </span>
-            </div>
-          {/each}
-        </div>
-
-        <div class="permission-dialog-actions">
-          {#if systemPermissionReport.screen_recording.status !== "granted" && systemPermissionReport.screen_recording.can_request}
-            <button
-              class="primary"
-              type="button"
-              disabled={systemPermissionChecking || systemPermissionRequesting}
-              on:click={requestScreenRecordingPermission}
-            >
-              {systemPermissionRequesting ? t.checkingSystemPermissions : t.requestScreenRecording}
-            </button>
-            <button class="ghost" type="button" on:click={openScreenRecordingPrivacySettings}>
-              {t.openPrivacySettings}
-            </button>
-          {/if}
-          {#if systemPermissionNeedsRestart}
-            <button class="primary" type="button" on:click={() => relaunch()}>
-              {t.restartApp}
-            </button>
-          {/if}
-          <button
-            class="ghost"
-            type="button"
-            disabled={systemPermissionChecking}
-            on:click={() => checkSystemPermissions({ openWhenNeedsAttention: true, notifyWhenReady: true })}
-          >
-            {systemPermissionChecking ? t.checkingSystemPermissions : t.recheckPermissions}
-          </button>
-          <button class="ghost" type="button" on:click={() => (systemPermissionDialogOpen = false)}>
-            {t.dismissPermissions}
-          </button>
-        </div>
-      </section>
     </div>
   {/if}
 

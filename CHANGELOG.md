@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.23
+
+- Removed the startup system capability precheck and permission dialog.
+
 ## v0.2.22
 
 - Fixed a macOS Screen Recording permission false negative by falling back to a tiny real capture probe when the system preflight result is stale.
