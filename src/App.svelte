@@ -806,6 +806,7 @@
   let htmlFrameReadyPromise: Promise<void> | null = null;
   let resolveHtmlFrameReady: (() => void) | null = null;
   let htmlFrameResizeObserver: ResizeObserver | null = null;
+  let htmlFrameMutationObserver: MutationObserver | null = null;
   let htmlFrameClickHandler: ((event: MouseEvent) => void) | null = null;
   let htmlDocHeadings: DocHeading[] = [];
   let query = "";
@@ -2067,7 +2068,27 @@
   function buildHtmlFrameSrcdoc(document: Document) {
     const baseHref = getDocumentBaseHref(document.path);
     const bridge = `<script>window.__memViewHtmlReady = true;<\/script>`;
-    const additions = `${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}<style data-mem-view>html{background:#fff;}body{min-width:0;}img,video{max-width:100%;height:auto;}body.mem-view-embedded nav,body.mem-view-embedded aside,body.mem-view-embedded [role="navigation"],body.mem-view-embedded .sidebar,body.mem-view-embedded .side-nav,body.mem-view-embedded .toc,body.mem-view-embedded .table-of-contents{display:none!important;}body.mem-view-embedded{margin-left:0!important;}mark.find-highlight{border-radius:3px;background:#ffe08a;color:inherit;padding:0 1px;}mark.find-highlight.active{background:#f59f00;color:#101820;}</style>${bridge}`;
+    const embeddedCss = [
+      "html{background:#fff;}",
+      "body{min-width:0;}",
+      "img,video{max-width:100%;height:auto;}",
+      "body.mem-view-embedded nav,body.mem-view-embedded aside,body.mem-view-embedded [role=\"navigation\"],body.mem-view-embedded .sidebar,body.mem-view-embedded .side-nav,body.mem-view-embedded .toc,body.mem-view-embedded .table-of-contents{display:none!important;}",
+      "body.mem-view-embedded{margin-left:0!important;}",
+      "mark.find-highlight{border-radius:3px;background:#ffe08a;color:inherit;padding:0 1px;}",
+      "mark.find-highlight.active{background:#f59f00;color:#101820;}",
+      ".mem-view-html-diagram-frame{position:relative;}",
+      ".mem-view-html-diagram-frame>.mem-view-html-diagram-actions{position:absolute;top:8px;right:8px;z-index:2147483647;display:flex;gap:6px;opacity:.78;transition:opacity 120ms ease;}",
+      ".mem-view-html-diagram-frame:hover>.mem-view-html-diagram-actions,.mem-view-html-diagram-actions:focus-within{opacity:1;}",
+      ".mem-view-html-diagram-copy,.mem-view-html-diagram-zoom{display:grid;width:30px;height:30px;place-items:center;border:1px solid rgba(160,160,152,.7);border-radius:7px;background:rgba(255,255,255,.92);color:#24313d;font:16px/1 system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}",
+      ".mem-view-html-diagram-copy:hover,.mem-view-html-diagram-zoom:hover{border-color:#9daaa5;background:#fff;}",
+      ".mem-view-html-diagram-copy::before{content:\"⎘\";}",
+      ".mem-view-html-diagram-zoom::before{content:\"⛶\";}",
+      ".mem-view-html-diagram-copy.copied{border-color:#8fc2aa;background:#eef8f2;color:#0f6b47;}",
+      ".mem-view-html-diagram-copy.copied::before{content:\"✓\";}",
+      ".mem-view-html-diagram-copy.error{border-color:#d5a3a3;background:#fff1f1;color:#9b1c1c;}",
+      ".mem-view-html-diagram-copy.error::before{content:\"!\";}"
+    ].join("");
+    const additions = `${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}<style data-mem-view>${embeddedCss}</style>${bridge}`;
     const content = document.content;
 
     if (/<head[\s>]/i.test(content)) {
@@ -2135,11 +2156,23 @@
 
     prepareHtmlDocument(frameDocument);
     frameDocument.body?.classList.add("mem-view-embedded");
+    enhanceHtmlMermaidDiagrams(frameDocument);
     htmlDocHeadings = collectHtmlHeadings(frameDocument);
     htmlFrameClickHandler = (event) => {
-      void handleHtmlFrameLinkClick(event);
+      void handleHtmlFrameClick(event);
     };
     frameDocument.addEventListener("click", htmlFrameClickHandler, true);
+
+    htmlFrameMutationObserver = new MutationObserver(() => {
+      enhanceHtmlMermaidDiagrams(frameDocument);
+      updateHtmlFrameHeight();
+    });
+    if (frameDocument.body) {
+      htmlFrameMutationObserver.observe(frameDocument.body, {
+        childList: true,
+        subtree: true
+      });
+    }
 
     htmlFrameResizeObserver = new ResizeObserver(() => updateHtmlFrameHeight());
     if (frameDocument.body) {
@@ -2159,6 +2192,8 @@
     htmlFrameClickHandler = null;
     htmlFrameResizeObserver?.disconnect();
     htmlFrameResizeObserver = null;
+    htmlFrameMutationObserver?.disconnect();
+    htmlFrameMutationObserver = null;
     if (!options.keepFrame) {
       htmlFrameElement = null;
     }
@@ -2187,6 +2222,74 @@
       readerElement?.clientHeight ?? 0
     );
     htmlFrameElement.style.height = `${Math.max(240, height)}px`;
+  }
+
+  function enhanceHtmlMermaidDiagrams(frameDocument: globalThis.Document) {
+    const diagramElements = new Set<Element>();
+    frameDocument
+      .querySelectorAll<SVGSVGElement>(".mermaid svg, svg[id^='mermaid-'], svg[aria-roledescription]")
+      .forEach((svg) => {
+        diagramElements.add(svg.closest(".mermaid") ?? svg);
+      });
+
+    diagramElements.forEach((diagramElement) => {
+      const frame = getOrCreateHtmlDiagramFrame(diagramElement);
+      if (!frame) {
+        return;
+      }
+
+      ensureHtmlDiagramActions(frame);
+    });
+  }
+
+  function getOrCreateHtmlDiagramFrame(diagramElement: Element) {
+    const existingFrame = diagramElement.closest<HTMLElement>(".mem-view-html-diagram-frame");
+    if (existingFrame) {
+      return existingFrame;
+    }
+
+    const existingDiagramWrapper = diagramElement.closest<HTMLElement>(".diagram-wrap");
+    if (existingDiagramWrapper) {
+      existingDiagramWrapper.classList.add("mem-view-html-diagram-frame");
+      return existingDiagramWrapper;
+    }
+
+    const parent = diagramElement.parentElement;
+    if (!parent) {
+      return null;
+    }
+
+    const frame = diagramElement.ownerDocument.createElement("figure");
+    frame.className = "mem-view-html-diagram-frame";
+    frame.style.margin = "0";
+    parent.insertBefore(frame, diagramElement);
+    frame.appendChild(diagramElement);
+    return frame;
+  }
+
+  function ensureHtmlDiagramActions(frame: HTMLElement) {
+    const hasActions = Array.from(frame.children).some((child) =>
+      child.classList.contains("mem-view-html-diagram-actions")
+    );
+    if (hasActions) {
+      return;
+    }
+
+    const actions = frame.ownerDocument.createElement("div");
+    actions.className = "mem-view-html-diagram-actions";
+    actions.appendChild(createHtmlDiagramButton("mem-view-html-diagram-copy", t.copyDiagram));
+    actions.appendChild(createHtmlDiagramButton("mem-view-html-diagram-zoom", t.enlargeDiagram));
+    frame.appendChild(actions);
+  }
+
+  function createHtmlDiagramButton(className: string, label: string) {
+    const frameDocument = getHtmlFrameDocument();
+    const button = (frameDocument ?? document).createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    return button;
   }
 
   function prepareHtmlDocument(frameDocument: globalThis.Document) {
@@ -2564,6 +2667,49 @@
       await scrollToReaderAnchor(target.anchor);
     }
     return true;
+  }
+
+  async function handleHtmlFrameClick(event: MouseEvent) {
+    const target = event.target as Element | null;
+    if (!target || typeof target.closest !== "function") {
+      return;
+    }
+
+    const copyButton = target.closest<HTMLButtonElement>(".mem-view-html-diagram-copy");
+    if (copyButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const svg = getHtmlFrameDiagramSvg(copyButton);
+      if (svg) {
+        await copyInlineDiagram(svg, copyButton);
+      }
+      return;
+    }
+
+    const zoomButton = target.closest<HTMLButtonElement>(".mem-view-html-diagram-zoom");
+    if (zoomButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const svg = getHtmlFrameDiagramSvg(zoomButton);
+      if (svg) {
+        zoomedDiagramHtml = serializeDiagramSvg(svg);
+        zoomedDiagramTitle = current?.title ?? t.mermaidDiagram;
+        setCopyDiagramState("idle");
+        resetDiagramView();
+        await tick();
+        fitDiagramToViewport();
+      }
+      return;
+    }
+
+    await handleHtmlFrameLinkClick(event);
+  }
+
+  function getHtmlFrameDiagramSvg(button: HTMLButtonElement) {
+    const frame = button.closest<HTMLElement>(".mem-view-html-diagram-frame");
+    return frame?.querySelector<SVGSVGElement>(".mermaid svg, svg") ?? null;
   }
 
   async function handleHtmlFrameLinkClick(event: MouseEvent) {
@@ -4112,7 +4258,8 @@
         continue;
       }
 
-      const computed = getComputedStyle(sourceElement);
+      const computed = sourceElement.ownerDocument.defaultView?.getComputedStyle(sourceElement) ??
+        getComputedStyle(sourceElement);
       for (const property of properties) {
         const value = computed.getPropertyValue(property);
         if (value) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.22
+
+- Fixed a macOS Screen Recording permission false negative by falling back to a tiny real capture probe when the system preflight result is stale.
+- Added zoom and copy-image controls for Mermaid diagrams rendered inside HTML documents.
+
 ## v0.2.21
 
 - Added startup system capability checks for macOS Screen Recording, clipboard availability, and GitHub network reachability.

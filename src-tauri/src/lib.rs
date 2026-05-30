@@ -662,6 +662,16 @@ fn screen_recording_permission(request: bool) -> SystemPermissionCheck {
         );
     }
 
+    if probe_screen_capture_access().is_ok() {
+        return permission_check(
+            "granted",
+            true,
+            false,
+            false,
+            "屏幕录制截图能力可用；系统预检未命中，但实际截图测试通过",
+        );
+    }
+
     if request {
         let granted = unsafe { CGRequestScreenCaptureAccess() };
         if granted {
@@ -673,6 +683,16 @@ fn screen_recording_permission(request: bool) -> SystemPermissionCheck {
                 "屏幕录制权限已授权；macOS 可能需要重启应用后才会让截图能力完全生效",
             );
         }
+
+        if probe_screen_capture_access().is_ok() {
+            return permission_check(
+                "granted",
+                true,
+                false,
+                false,
+                "屏幕录制截图能力可用；系统授权状态刷新较慢，已按实际能力放行",
+            );
+        }
     }
 
     permission_check(
@@ -682,6 +702,24 @@ fn screen_recording_permission(request: bool) -> SystemPermissionCheck {
         false,
         "屏幕录制权限未授权，标注导出时无法自动生成截图证据",
     )
+}
+
+#[cfg(target_os = "macos")]
+fn probe_screen_capture_access() -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!(
+        "mem-view-screen-permission-{}-{}.png",
+        std::process::id(),
+        unix_timestamp_nanos()
+    ));
+    let rect = AnnotationCaptureRect {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+    let result = capture_screen_region_to_png(&rect, &path);
+    let _ = fs::remove_file(&path);
+    result
 }
 
 #[cfg(not(target_os = "macos"))]
