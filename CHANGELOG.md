@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.21
+
+- Added startup system capability checks for macOS Screen Recording, clipboard availability, and GitHub network reachability.
+- Added a system capability dialog that can request Screen Recording permission, open macOS privacy settings, recheck status, and prompt for relaunch when needed.
+
 ## v0.2.20
 
 - Added HTML as a first-class document type alongside Markdown, including repository scanning, standalone file opening, local resource loading, outline extraction, find, link navigation, and annotation support.
