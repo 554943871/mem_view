@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.19
+
+- Rebuilt the macOS arm64 package after the repository-state recovery fixes.
+- Kept the GitHub release separate from the online updater until the updater signing key is available.
+
 ## v0.2.18
 
 - Added a header action to copy the current document's full local file path.
