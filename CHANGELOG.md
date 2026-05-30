@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.20
+
+- Added HTML as a first-class document type alongside Markdown, including repository scanning, standalone file opening, local resource loading, outline extraction, find, link navigation, and annotation support.
+- Added document last-updated time in the reader header.
+- Added a copy button for the current document's full local path.
+- Preserved each memory repository's expanded folders, open document, and reader state when switching repositories.
+
 ## v0.2.19
 
 - Rebuilt the macOS arm64 package after the repository-state recovery fixes.

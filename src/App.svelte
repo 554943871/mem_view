@@ -18,12 +18,16 @@
     children: TreeNode[];
   };
 
+  type DocumentContentType = "markdown" | "html";
+
   type DocMeta = {
     id: string;
     title: string;
     path: string;
     relative_path: string;
     kind: string;
+    content_type: DocumentContentType;
+    modified_at_unix_ms: number;
     has_mermaid: boolean;
   };
 
@@ -32,7 +36,9 @@
     tree: TreeNode[];
     docs: DocMeta[];
     counts: {
+      documents: number;
       markdown: number;
+      html: number;
       mermaid: number;
       requirements: number;
     };
@@ -48,7 +54,9 @@
     path: string;
     relative_path: string;
     kind: string;
-    markdown: string;
+    content: string;
+    content_type: DocumentContentType;
+    modified_at_unix_ms: number;
     has_mermaid: boolean;
     read_chain: Array<{
       label: string;
@@ -64,6 +72,17 @@
     headingCounts: Map<string, number>;
     nodeCounts: Map<string, number>;
     documentPath: string;
+  };
+  type DocumentRenderer = {
+    id: DocumentContentType;
+    render: (document: Document) => void;
+    afterRender: (document: Document) => Promise<void>;
+    getHeadings: (document: Document) => DocHeading[];
+    getCoveredNodes: (rect: AnnotationRect, document: Document) => AnnotationCoveredNode[];
+    clearFindHighlights: () => void;
+    highlightFindMatches: (needle: string) => HTMLElement[];
+    setActiveFindMatch: (matches?: HTMLElement[], scroll?: boolean) => void;
+    findAnchor: (anchor: string) => HTMLElement | null;
   };
   type ViewType = "repo" | "file";
   type CopyDiagramState = "idle" | "copying" | "copied" | "error";
@@ -188,7 +207,8 @@
     recentRepos: string;
     noRecentRepos: string;
     chooseNewRepo: string;
-    openMarkdownFile: string;
+    openDocumentFile: string;
+    lastUpdated: string;
     checkUpdate: string;
     updateNow: string;
     updateAvailable: string;
@@ -207,7 +227,7 @@
     installUpdate: string;
     updateProgress: string;
     closeUpdateDialog: string;
-    dropMarkdownFile: string;
+    dropDocumentFile: string;
     dropUnsupported: string;
     closeView: string;
     openViews: string;
@@ -299,7 +319,8 @@
       recentRepos: "快捷切换",
       noRecentRepos: "暂无最近打开",
       chooseNewRepo: "打开新记忆库",
-      openMarkdownFile: "打开 Markdown 文件",
+      openDocumentFile: "打开文档文件",
+      lastUpdated: "最后更新",
       checkUpdate: "检查更新",
       updateNow: "更新",
       updateAvailable: "发现新版本",
@@ -318,12 +339,12 @@
       installUpdate: "安装更新",
       updateProgress: "更新进度",
       closeUpdateDialog: "关闭更新弹窗",
-      dropMarkdownFile: "松开以打开 Markdown 文件",
-      dropUnsupported: "请拖入 .md 文件",
+      dropDocumentFile: "松开以打开文档文件",
+      dropUnsupported: "请拖入 .md、.html 或 .htm 文件",
       closeView: "关闭视图",
       openViews: "打开的视图",
       chooseRepoTitle: "选择记忆库目录",
-      chooseFileTitle: "打开 Markdown 文件",
+      chooseFileTitle: "打开文档文件",
       noRepoTitle: "选择一个本地记忆库",
       noRepoBody: "请选择一个 Git 记忆库目录；如果选到仓库内的子目录，memView 会自动打开该 Git 仓库根目录。",
       noRepoSelected: "未选择记忆库",
@@ -403,7 +424,9 @@
         mission: "任务组",
         task: "任务",
         document: "文档",
+        document_file: "文档文件",
         markdown_file: "Markdown 文件",
+        html_file: "HTML 文件",
         folder: "目录"
       },
       chainLabels: {
@@ -427,7 +450,8 @@
       recentRepos: "Quick switch",
       noRecentRepos: "No recent repos",
       chooseNewRepo: "Open New Repo",
-      openMarkdownFile: "Open Markdown File",
+      openDocumentFile: "Open Document File",
+      lastUpdated: "Updated",
       checkUpdate: "Check for Updates",
       updateNow: "Update",
       updateAvailable: "Update available",
@@ -446,12 +470,12 @@
       installUpdate: "Install update",
       updateProgress: "Update progress",
       closeUpdateDialog: "Close update dialog",
-      dropMarkdownFile: "Drop to open Markdown file",
-      dropUnsupported: "Drop .md files only",
+      dropDocumentFile: "Drop to open document file",
+      dropUnsupported: "Drop .md, .html, or .htm files only",
       closeView: "Close view",
       openViews: "Open views",
       chooseRepoTitle: "Choose Memory Repo",
-      chooseFileTitle: "Open Markdown File",
+      chooseFileTitle: "Open Document File",
       noRepoTitle: "Choose a local memory repo",
       noRepoBody: "Choose a Git memory repo folder. If you choose a child folder, memView opens the Git repository root.",
       noRepoSelected: "No repo selected",
@@ -531,7 +555,9 @@
         mission: "mission",
         task: "task",
         document: "document",
+        document_file: "Document file",
         markdown_file: "Markdown file",
+        html_file: "HTML file",
         folder: "folder"
       },
       chainLabels: {
@@ -670,10 +696,43 @@
     }
   });
 
+  const documentRenderers: Record<DocumentContentType, DocumentRenderer> = {
+    markdown: {
+      id: "markdown",
+      render: renderMarkdownDocument,
+      afterRender: completeMarkdownRenderedDocumentUpdate,
+      getHeadings: getMarkdownDocumentHeadings,
+      getCoveredNodes: getMarkdownCoveredNodes,
+      clearFindHighlights: clearMarkdownFindHighlights,
+      highlightFindMatches: highlightMarkdownReaderMatches,
+      setActiveFindMatch: setActiveMarkdownFindMatch,
+      findAnchor: findMarkdownReaderAnchor
+    },
+    html: {
+      id: "html",
+      render: renderHtmlDocument,
+      afterRender: completeHtmlRenderedDocumentUpdate,
+      getHeadings: getHtmlDocumentHeadings,
+      getCoveredNodes: getHtmlCoveredNodes,
+      clearFindHighlights: clearHtmlFindHighlights,
+      highlightFindMatches: highlightHtmlReaderMatches,
+      setActiveFindMatch: setActiveHtmlFindMatch,
+      findAnchor: findHtmlReaderAnchor
+    }
+  };
+
   let snapshot: RepoSnapshot | null = null;
   let current: Document | null = null;
   let repoCurrent: Document | null = null;
   let renderedHtml = "";
+  let activeRendererId: DocumentContentType | "" = "";
+  let htmlFrameSrcdoc = "";
+  let htmlFrameElement: HTMLIFrameElement | null = null;
+  let htmlFrameReadyPromise: Promise<void> | null = null;
+  let resolveHtmlFrameReady: (() => void) | null = null;
+  let htmlFrameResizeObserver: ResizeObserver | null = null;
+  let htmlFrameClickHandler: ((event: MouseEvent) => void) | null = null;
+  let htmlDocHeadings: DocHeading[] = [];
   let query = "";
   let status: StatusKey = "idle";
   let error = "";
@@ -751,12 +810,17 @@
       ? flattenDocs(searchDocs(snapshot.docs, query))
       : flatTree
     : [];
-  $: docHeadings = current ? getDocumentHeadings(current.markdown) : [];
-  $: headerKind = activeViewIsFile ? "markdown_file" : current?.kind ?? "repo";
+  $: docHeadings = current
+    ? current.content_type === "html"
+      ? htmlDocHeadings
+      : getDocumentRenderer(current).getHeadings(current)
+    : [];
+  $: headerKind = current ? getDocumentDisplayKind(current, activeViewIsFile) : "repo";
   $: headerTitle = current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle);
   $: headerPath = activeViewIsFile
     ? current?.path ?? activeView?.path ?? t.noRepoSelected
     : current?.relative_path ?? snapshot?.root_path ?? (repoPath || t.noRepoSelected);
+  $: headerUpdatedAt = current ? formatDocumentUpdatedAt(current.modified_at_unix_ms) : "";
   $: findStatus = formatFindStatus();
   $: copyDiagramButtonText = getCopyDiagramStateText(copyDiagramState);
   $: copyDiagramButtonTitle = getCopyDiagramButtonTitle();
@@ -798,6 +862,7 @@
     window.removeEventListener("resize", handleWindowResize);
     window.removeEventListener("beforeunload", handleBeforeUnload);
     dragDropUnlisten?.();
+    teardownHtmlFrameBridge();
     if (copyDiagramResetTimer !== null) {
       window.clearTimeout(copyDiagramResetTimer);
     }
@@ -827,28 +892,28 @@
         }
 
         isDragHovering = false;
-        void openDroppedMarkdownFiles(event.payload.paths);
+        void openDroppedDocumentFiles(event.payload.paths);
       });
     } catch (err) {
       console.warn("File drag and drop setup failed", err);
     }
   }
 
-  async function openDroppedMarkdownFiles(paths: string[]) {
-    const markdownPaths = paths.filter(isMarkdownPath);
-    if (!markdownPaths.length) {
+  async function openDroppedDocumentFiles(paths: string[]) {
+    const documentPaths = paths.filter(isDocumentPath);
+    if (!documentPaths.length) {
       error = t.dropUnsupported;
       status = "error";
       return;
     }
 
-    for (const path of markdownPaths) {
-      await openMarkdownFile(path);
+    for (const path of documentPaths) {
+      await openStandaloneDocument(path);
     }
   }
 
-  function isMarkdownPath(path: string) {
-    return /\.md$/i.test(path.trim());
+  function isDocumentPath(path: string) {
+    return /\.(md|html?)$/i.test(path.trim());
   }
 
   function getInitialLocale(): Locale {
@@ -1031,14 +1096,15 @@
       return;
     }
 
-    renderedHtml = renderMarkdown(current.markdown);
+    renderDocumentContent(current);
     await completeRenderedDocumentUpdate();
   }
 
   async function completeRenderedDocumentUpdate() {
     await tick();
-    enhanceRenderedTables();
-    await renderMermaid();
+    if (current) {
+      await getDocumentRenderer(current).afterRender(current);
+    }
     await refreshFindHighlights();
   }
 
@@ -1047,6 +1113,37 @@
       return "-";
     }
     return t.kinds[kind] ?? kind;
+  }
+
+  function formatDocumentUpdatedAt(value: number | null | undefined) {
+    if (!value) {
+      return "";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    const formatted = new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).format(date).replace(/\//g, "-");
+    return `${t.lastUpdated} ${formatted}`;
+  }
+
+  function getDocumentDisplayKind(document: Document, isFileView: boolean) {
+    if (!isFileView) {
+      return document.kind;
+    }
+    return document.content_type === "html" ? "html_file" : "markdown_file";
+  }
+
+  function getDocumentRenderer(document: Document) {
+    return documentRenderers[document.content_type] ?? documentRenderers.markdown;
   }
 
   function formatChainLabel(label: string) {
@@ -1152,13 +1249,17 @@
     const view = getOpenView(activeViewId);
     if (!view) {
       current = null;
-      renderedHtml = "";
+      clearRenderedDocument();
       status = "idle";
       return;
     }
 
     current = view.type === "repo" ? repoCurrent : fileDocuments.get(view.id) ?? null;
-    renderedHtml = current ? renderMarkdown(current.markdown) : "";
+    if (current) {
+      renderDocumentContent(current);
+    } else {
+      clearRenderedDocument();
+    }
     status = current || (view.type === "repo" && snapshot) ? "ready" : "idle";
     if (!current) {
       return;
@@ -1181,19 +1282,19 @@
     await loadRepo(selected);
   }
 
-  async function browseMarkdownFile() {
+  async function browseDocumentFile() {
     const selected = await openDialog({
       directory: false,
       multiple: false,
       title: t.chooseFileTitle,
-      filters: [{ name: "Markdown", extensions: ["md"] }]
+      filters: [{ name: "Documents", extensions: ["md", "html", "htm"] }]
     });
 
     if (typeof selected !== "string") {
       return;
     }
 
-    await openMarkdownFile(selected);
+    await openStandaloneDocument(selected);
   }
 
   async function checkForUpdates(options: CheckUpdateOptions = {}) {
@@ -1418,7 +1519,7 @@
       status = "idle";
       snapshot = null;
       current = null;
-      renderedHtml = "";
+      clearRenderedDocument();
       error = "";
       return;
     }
@@ -1432,6 +1533,9 @@
     const previousRepoCurrent = repoCurrent;
     const previousCurrent = current;
     const previousRenderedHtml = renderedHtml;
+    const previousActiveRendererId = activeRendererId;
+    const previousHtmlFrameSrcdoc = htmlFrameSrcdoc;
+    const previousHtmlDocHeadings = htmlDocHeadings;
     const previousCollapsedFolderIds = new Set(collapsedFolderIds);
     const previousActiveViewId = activeViewId;
     const preservedRelativePath = options.preserveCurrentDocument ? repoCurrent?.relative_path : "";
@@ -1489,13 +1593,16 @@
         repoCurrent = previousRepoCurrent;
         current = previousCurrent;
         renderedHtml = previousRenderedHtml;
+        activeRendererId = previousActiveRendererId;
+        htmlFrameSrcdoc = previousHtmlFrameSrcdoc;
+        htmlDocHeadings = previousHtmlDocHeadings;
         collapsedFolderIds = previousCollapsedFolderIds;
         activeViewId = previousActiveViewId;
       } else {
         snapshot = null;
         repoCurrent = null;
         current = null;
-        renderedHtml = "";
+        clearRenderedDocument();
       }
       error = String(err);
       status = "error";
@@ -1522,7 +1629,7 @@
     try {
       repoCurrent = await invoke<Document>("read_document", { repoPath, path });
       current = repoCurrent;
-      renderedHtml = renderMarkdown(repoCurrent.markdown);
+      renderDocumentContent(repoCurrent);
       status = "ready";
       await completeRenderedDocumentUpdate();
       if (options.restoreScrollTop !== undefined) {
@@ -1539,7 +1646,7 @@
     }
   }
 
-  async function openMarkdownFile(path: string, anchor = "", options: OpenDocumentOptions = {}) {
+  async function openStandaloneDocument(path: string, anchor = "", options: OpenDocumentOptions = {}) {
     if (!isRestoringNavigation) {
       updateCurrentHistoryScroll();
     }
@@ -1557,7 +1664,7 @@
     status = "opening";
     error = "";
     try {
-      const doc = await invoke<Document>("read_markdown_file", { path });
+      const doc = await invoke<Document>("read_standalone_document", { path });
       const view = createFileView(doc);
       const nextFileDocuments = new Map(fileDocuments);
       nextFileDocuments.set(view.id, doc);
@@ -1565,7 +1672,7 @@
       upsertOpenView(view);
       activeViewId = view.id;
       current = doc;
-      renderedHtml = renderMarkdown(doc.markdown);
+      renderDocumentContent(doc);
       status = "ready";
       await completeRenderedDocumentUpdate();
       if (anchor) {
@@ -1673,7 +1780,7 @@
 
   async function restoreNavigationEntry(entry: NavigationEntry) {
     if (entry.type === "file") {
-      await openMarkdownFile(entry.path, "", { restoreScrollTop: entry.scrollTop });
+      await openStandaloneDocument(entry.path, "", { restoreScrollTop: entry.scrollTop });
       return;
     }
 
@@ -1683,13 +1790,34 @@
     await openDocument(entry.path, { restoreScrollTop: entry.scrollTop });
   }
 
-  function renderMarkdown(source: string) {
-    return markdown.render(source, createRenderEnv(current));
+  function clearRenderedDocument() {
+    renderedHtml = "";
+    activeRendererId = "";
+    htmlFrameSrcdoc = "";
+    htmlDocHeadings = [];
+    teardownHtmlFrameBridge();
   }
 
-  function getDocumentHeadings(source: string): DocHeading[] {
+  function renderDocumentContent(document: Document) {
+    getDocumentRenderer(document).render(document);
+  }
+
+  function renderMarkdownDocument(document: Document) {
+    teardownHtmlFrameBridge();
+    activeRendererId = "markdown";
+    htmlFrameSrcdoc = "";
+    htmlDocHeadings = [];
+    renderedHtml = markdown.render(document.content, createRenderEnv(document));
+  }
+
+  async function completeMarkdownRenderedDocumentUpdate() {
+    enhanceRenderedTables();
+    await renderMermaid();
+  }
+
+  function getMarkdownDocumentHeadings(document: Document): DocHeading[] {
     const env = createRenderEnv();
-    const tokens = markdown.parse(source, {});
+    const tokens = markdown.parse(document.content, {});
     const headings: DocHeading[] = [];
 
     for (let index = 0; index < tokens.length; index += 1) {
@@ -1717,6 +1845,216 @@
     }
 
     return headings;
+  }
+
+  function renderHtmlDocument(document: Document) {
+    teardownHtmlFrameBridge({ keepFrame: true });
+    activeRendererId = "html";
+    renderedHtml = "";
+    htmlDocHeadings = [];
+    prepareHtmlFrameReady();
+    htmlFrameSrcdoc = buildHtmlFrameSrcdoc(document);
+  }
+
+  async function completeHtmlRenderedDocumentUpdate() {
+    await waitForHtmlFrameReady();
+    updateHtmlFrameHeight();
+  }
+
+  function getHtmlDocumentHeadings() {
+    return htmlDocHeadings;
+  }
+
+  function buildHtmlFrameSrcdoc(document: Document) {
+    const baseHref = getDocumentBaseHref(document.path);
+    const bridge = `<script>window.__memViewHtmlReady = true;<\/script>`;
+    const additions = `${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}<style data-mem-view>html{background:#fff;}body{min-width:0;}img,video{max-width:100%;height:auto;}body.mem-view-embedded nav,body.mem-view-embedded aside,body.mem-view-embedded [role="navigation"],body.mem-view-embedded .sidebar,body.mem-view-embedded .side-nav,body.mem-view-embedded .toc,body.mem-view-embedded .table-of-contents{display:none!important;}body.mem-view-embedded{margin-left:0!important;}mark.find-highlight{border-radius:3px;background:#ffe08a;color:inherit;padding:0 1px;}mark.find-highlight.active{background:#f59f00;color:#101820;}</style>${bridge}`;
+    const content = document.content;
+
+    if (/<head[\s>]/i.test(content)) {
+      return content.replace(/<head([^>]*)>/i, `<head$1>${additions}`);
+    }
+    if (/<html[\s>]/i.test(content)) {
+      return content.replace(/<html([^>]*)>/i, `<html$1><head>${additions}</head>`);
+    }
+    return `<!doctype html><html><head>${additions}</head><body>${content}</body></html>`;
+  }
+
+  function getDocumentBaseHref(path: string) {
+    const normalized = normalizePathname(path);
+    const slashIndex = normalized.lastIndexOf("/");
+    if (slashIndex === -1) {
+      return "";
+    }
+
+    const directoryPath = normalized.slice(0, slashIndex + 1);
+    if (isTauri()) {
+      try {
+        const converted = convertFileSrc(directoryPath);
+        return converted.endsWith("/") ? converted : `${converted}/`;
+      } catch {
+        return "";
+      }
+    }
+
+    return `file://${directoryPath}`;
+  }
+
+  function prepareHtmlFrameReady() {
+    htmlFrameReadyPromise = new Promise((resolve) => {
+      resolveHtmlFrameReady = resolve;
+    });
+  }
+
+  async function waitForHtmlFrameReady() {
+    if (!htmlFrameReadyPromise) {
+      return;
+    }
+    await Promise.race([
+      htmlFrameReadyPromise,
+      new Promise<void>((resolve) => window.setTimeout(resolve, 1200))
+    ]);
+  }
+
+  async function handleHtmlFrameLoad() {
+    try {
+      await setupHtmlFrameBridge();
+    } finally {
+      resolveHtmlFrameReady?.();
+      resolveHtmlFrameReady = null;
+    }
+  }
+
+  async function setupHtmlFrameBridge() {
+    await tick();
+    teardownHtmlFrameBridge({ keepFrame: true });
+    const frameDocument = getHtmlFrameDocument();
+    if (!frameDocument) {
+      htmlDocHeadings = [];
+      return;
+    }
+
+    prepareHtmlDocument(frameDocument);
+    frameDocument.body?.classList.add("mem-view-embedded");
+    htmlDocHeadings = collectHtmlHeadings(frameDocument);
+    htmlFrameClickHandler = (event) => {
+      void handleHtmlFrameLinkClick(event);
+    };
+    frameDocument.addEventListener("click", htmlFrameClickHandler, true);
+
+    htmlFrameResizeObserver = new ResizeObserver(() => updateHtmlFrameHeight());
+    if (frameDocument.body) {
+      htmlFrameResizeObserver.observe(frameDocument.body);
+    }
+    if (frameDocument.documentElement) {
+      htmlFrameResizeObserver.observe(frameDocument.documentElement);
+    }
+    updateHtmlFrameHeight();
+  }
+
+  function teardownHtmlFrameBridge(options: { keepFrame?: boolean } = {}) {
+    const frameDocument = getHtmlFrameDocument();
+    if (frameDocument && htmlFrameClickHandler) {
+      frameDocument.removeEventListener("click", htmlFrameClickHandler, true);
+    }
+    htmlFrameClickHandler = null;
+    htmlFrameResizeObserver?.disconnect();
+    htmlFrameResizeObserver = null;
+    if (!options.keepFrame) {
+      htmlFrameElement = null;
+    }
+  }
+
+  function getHtmlFrameDocument() {
+    try {
+      return htmlFrameElement?.contentDocument ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function updateHtmlFrameHeight() {
+    const frameDocument = getHtmlFrameDocument();
+    if (!htmlFrameElement || !frameDocument) {
+      return;
+    }
+    const body = frameDocument.body;
+    const documentElement = frameDocument.documentElement;
+    const height = Math.max(
+      body?.scrollHeight ?? 0,
+      body?.offsetHeight ?? 0,
+      documentElement?.scrollHeight ?? 0,
+      documentElement?.offsetHeight ?? 0,
+      readerElement?.clientHeight ?? 0
+    );
+    htmlFrameElement.style.height = `${Math.max(240, height)}px`;
+  }
+
+  function prepareHtmlDocument(frameDocument: globalThis.Document) {
+    const elements = Array.from(
+      frameDocument.body?.querySelectorAll<HTMLElement>(
+        "h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th,figure,img,section,article"
+      ) ?? []
+    );
+    elements.forEach((element, index) => {
+      if (!isVisibleHtmlElement(element) || !isMeaningfulHtmlNode(element)) {
+        return;
+      }
+      if (!element.dataset.memNodeId) {
+        element.dataset.memNodeId = `html-${element.tagName.toLowerCase()}-${index + 1}`;
+      }
+      element.dataset.nodeType = `html_${element.tagName.toLowerCase()}`;
+    });
+  }
+
+  function collectHtmlHeadings(frameDocument: globalThis.Document): DocHeading[] {
+    const env = createRenderEnv();
+    return Array.from(frameDocument.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"))
+      .map((heading) => {
+        const title = normalizeExcerpt(heading.innerText || heading.textContent || "");
+        const level = Number(heading.tagName.slice(1));
+        if (!title || !Number.isFinite(level)) {
+          return null;
+        }
+        if (!heading.id) {
+          heading.id = getUniqueHeadingId(title, env);
+        }
+        return { id: heading.id, title, level };
+      })
+      .filter((heading): heading is DocHeading => Boolean(heading));
+  }
+
+  function isVisibleHtmlElement(element: HTMLElement) {
+    const rect = element.getBoundingClientRect();
+    const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+    return rect.width > 0 &&
+      rect.height > 0 &&
+      style?.display !== "none" &&
+      style?.visibility !== "hidden";
+  }
+
+  function isMeaningfulHtmlNode(element: HTMLElement) {
+    if (element.tagName.toLowerCase() === "img") {
+      return true;
+    }
+    return Boolean(normalizeExcerpt(element.innerText || element.textContent || ""));
+  }
+
+  function scrollHtmlElementIntoReader(element: HTMLElement, block: "start" | "center" = "start") {
+    if (!readerElement || !htmlFrameElement) {
+      return;
+    }
+    const readerBounds = readerElement.getBoundingClientRect();
+    const frameBounds = htmlFrameElement.getBoundingClientRect();
+    const elementBounds = element.getBoundingClientRect();
+    const elementTop = frameBounds.top + elementBounds.top - readerBounds.top + readerElement.scrollTop;
+    const offset = block === "center"
+      ? Math.max(0, (readerElement.clientHeight - elementBounds.height) / 2)
+      : 0;
+    readerElement.scrollTo({
+      top: Math.max(0, elementTop - offset),
+      behavior: "smooth"
+    });
   }
 
   function headingIndent(level: number) {
@@ -2018,7 +2356,7 @@
 
     event.preventDefault();
     if (target.type === "file") {
-      await openMarkdownFile(target.path, target.anchor);
+      await openStandaloneDocument(target.path, target.anchor);
       return true;
     }
 
@@ -2027,6 +2365,47 @@
       await scrollToReaderAnchor(target.anchor);
     }
     return true;
+  }
+
+  async function handleHtmlFrameLinkClick(event: MouseEvent) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    const target = event.target as Element | null;
+    const link = target && typeof target.closest === "function"
+      ? target.closest("a")
+      : null;
+    if (!link) {
+      return;
+    }
+
+    const href = link.getAttribute("href")?.trim() ?? "";
+    if (!href) {
+      return;
+    }
+
+    if (href.startsWith("#")) {
+      event.preventDefault();
+      await scrollToReaderAnchor(href.slice(1));
+      return;
+    }
+
+    const resolved = resolveLinkedDocument(href);
+    if (!resolved) {
+      return;
+    }
+
+    event.preventDefault();
+    if (resolved.type === "file") {
+      await openStandaloneDocument(resolved.path, resolved.anchor);
+      return;
+    }
+
+    await openDocument(resolved.path);
+    if (resolved.anchor) {
+      await scrollToReaderAnchor(resolved.anchor);
+    }
   }
 
   function resolveLinkedDocument(href: string): LinkTarget | null {
@@ -2255,7 +2634,10 @@
     const candidates = [
       relativePath,
       relativePath.endsWith("/") ? `${relativePath}README.md` : `${relativePath}/README.md`,
-      relativePath.toLowerCase().endsWith(".md") ? relativePath : `${relativePath}.md`
+      relativePath.endsWith("/") ? `${relativePath}index.html` : `${relativePath}/index.html`,
+      isDocumentPath(relativePath) ? relativePath : `${relativePath}.md`,
+      isDocumentPath(relativePath) ? relativePath : `${relativePath}.html`,
+      isDocumentPath(relativePath) ? relativePath : `${relativePath}.htm`
     ];
     return snapshot.docs.find((doc) => candidates.includes(doc.relative_path)) ?? null;
   }
@@ -2268,17 +2650,21 @@
 
     await tick();
     requestAnimationFrame(() => {
-      const target = findReaderAnchor(decodedAnchor);
+      const target = current ? getDocumentRenderer(current).findAnchor(decodedAnchor) : null;
       if (!target) {
         return;
       }
 
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (current?.content_type === "html") {
+        scrollHtmlElementIntoReader(target, "start");
+      } else {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
       target.focus({ preventScroll: true });
     });
   }
 
-  function findReaderAnchor(anchor: string) {
+  function findMarkdownReaderAnchor(anchor: string) {
     const reader = document.querySelector<HTMLElement>(".reader");
     if (!reader) {
       return null;
@@ -2286,6 +2672,18 @@
 
     const ids = [anchor, slugifyHeading(anchor)];
     return Array.from(reader.querySelectorAll<HTMLElement>("[id], a[name]")).find((element) =>
+      ids.includes(element.id) || ids.includes(element.getAttribute("name") ?? "")
+    ) ?? null;
+  }
+
+  function findHtmlReaderAnchor(anchor: string) {
+    const frameDocument = getHtmlFrameDocument();
+    if (!frameDocument) {
+      return null;
+    }
+
+    const ids = [anchor, slugifyHeading(anchor)];
+    return Array.from(frameDocument.querySelectorAll<HTMLElement>("[id], a[name]")).find((element) =>
       ids.includes(element.id) || ids.includes(element.getAttribute("name") ?? "")
     ) ?? null;
   }
@@ -2327,17 +2725,17 @@
 
   async function refreshFindHighlights({ scroll = false } = {}) {
     await tick();
-    const reader = document.querySelector<HTMLElement>(".reader");
-    clearFindHighlights(reader);
+    clearFindHighlights();
 
     const needle = findQuery.trim();
-    if (!reader || !findOpen || !current || !needle) {
+    if (!findOpen || !current || !needle) {
       findMatchCount = 0;
       activeFindIndex = 0;
       return;
     }
 
-    const matches = highlightReaderMatches(reader, needle);
+    const renderer = getDocumentRenderer(current);
+    const matches = renderer.highlightFindMatches(needle);
     findMatchCount = matches.length;
     if (!matches.length) {
       activeFindIndex = 0;
@@ -2345,17 +2743,31 @@
     }
 
     activeFindIndex = Math.min(Math.max(activeFindIndex, 0), matches.length - 1);
-    setActiveFindMatch(matches, scroll);
+    renderer.setActiveFindMatch(matches, scroll);
   }
 
-  function highlightReaderMatches(reader: HTMLElement, needle: string) {
+  function highlightMarkdownReaderMatches(needle: string) {
+    const reader = document.querySelector<HTMLElement>(".reader");
+    return reader ? highlightTextMatches(reader, needle) : [];
+  }
+
+  function highlightHtmlReaderMatches(needle: string) {
+    const frameDocument = getHtmlFrameDocument();
+    return frameDocument?.body ? highlightTextMatches(frameDocument.body, needle) : [];
+  }
+
+  function highlightTextMatches(root: HTMLElement, needle: string) {
     const matches: HTMLElement[] = [];
     const textNodes: Text[] = [];
     const lowerNeedle = needle.toLowerCase();
-    const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT, {
+    const ownerDocument = root.ownerDocument;
+    const walker = ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
-        if (!parent || parent.closest(".mermaid, .diagram-actions, mark.find-highlight")) {
+        if (
+          !parent ||
+          parent.closest(".mermaid, .diagram-actions, mark.find-highlight, script, style, noscript")
+        ) {
           return NodeFilter.FILTER_REJECT;
         }
 
@@ -2373,7 +2785,7 @@
     for (const node of textNodes) {
       const text = node.nodeValue ?? "";
       const lowerText = text.toLowerCase();
-      const fragment = document.createDocumentFragment();
+      const fragment = ownerDocument.createDocumentFragment();
       let cursor = 0;
       let matchIndex = lowerText.indexOf(lowerNeedle);
 
@@ -2382,7 +2794,7 @@
           fragment.append(document.createTextNode(text.slice(cursor, matchIndex)));
         }
 
-        const mark = document.createElement("mark");
+        const mark = ownerDocument.createElement("mark");
         mark.className = "find-highlight";
         mark.textContent = text.slice(matchIndex, matchIndex + needle.length);
         fragment.append(mark);
@@ -2402,12 +2814,29 @@
     return matches;
   }
 
-  function clearFindHighlights(reader = document.querySelector<HTMLElement>(".reader")) {
-    if (!reader) {
+  function clearFindHighlights() {
+    if (!current) {
+      clearMarkdownFindHighlights();
+      clearHtmlFindHighlights();
+      return;
+    }
+    getDocumentRenderer(current).clearFindHighlights();
+  }
+
+  function clearMarkdownFindHighlights() {
+    clearFindHighlightsInRoot(document.querySelector<HTMLElement>(".reader"));
+  }
+
+  function clearHtmlFindHighlights() {
+    clearFindHighlightsInRoot(getHtmlFrameDocument()?.body ?? null);
+  }
+
+  function clearFindHighlightsInRoot(root: HTMLElement | null) {
+    if (!root) {
       return;
     }
 
-    const highlights = Array.from(reader.querySelectorAll<HTMLElement>("mark.find-highlight"));
+    const highlights = Array.from(root.querySelectorAll<HTMLElement>("mark.find-highlight"));
     for (const highlight of highlights) {
       const parent = highlight.parentNode;
       if (!parent) {
@@ -2422,7 +2851,7 @@
     }
   }
 
-  function setActiveFindMatch(matches = getFindMatches(), scroll = false) {
+  function setActiveMarkdownFindMatch(matches = getMarkdownFindMatches(), scroll = false) {
     matches.forEach((match, index) => {
       match.classList.toggle("active", index === activeFindIndex);
     });
@@ -2432,11 +2861,28 @@
     }
   }
 
-  function getFindMatches() {
+  function setActiveHtmlFindMatch(matches = getHtmlFindMatches(), scroll = false) {
+    matches.forEach((match, index) => {
+      match.classList.toggle("active", index === activeFindIndex);
+    });
+
+    if (scroll && matches[activeFindIndex]) {
+      scrollHtmlElementIntoReader(matches[activeFindIndex], "center");
+    }
+  }
+
+  function getMarkdownFindMatches() {
     return Array.from(document.querySelectorAll<HTMLElement>(".reader mark.find-highlight"));
   }
 
+  function getHtmlFindMatches() {
+    return Array.from(getHtmlFrameDocument()?.querySelectorAll<HTMLElement>("mark.find-highlight") ?? []);
+  }
+
   function moveFindMatch(delta: number) {
+    if (!current) {
+      return;
+    }
     if (!findQuery.trim()) {
       findInput?.focus();
       return;
@@ -2448,7 +2894,7 @@
     }
 
     activeFindIndex = (activeFindIndex + delta + findMatchCount) % findMatchCount;
-    setActiveFindMatch(undefined, true);
+    getDocumentRenderer(current).setActiveFindMatch(undefined, true);
   }
 
   function toggleAnnotationMode() {
@@ -2820,16 +3266,20 @@
       relativePath: current?.relative_path ?? "",
       repoPath: activeViewIsFile ? null : repoPath || null,
       title: current?.title ?? "",
-      kind: activeViewIsFile ? "markdown_file" : current?.kind ?? "document"
+      kind: current ? getDocumentDisplayKind(current, activeViewIsFile) : "document"
     };
   }
 
   function getCoveredNodes(rect: AnnotationRect, document: Document): AnnotationCoveredNode[] {
+    return getDocumentRenderer(document).getCoveredNodes(rect, document);
+  }
+
+  function getMarkdownCoveredNodes(rect: AnnotationRect, document: Document): AnnotationCoveredNode[] {
     if (!readerElement) {
       return [];
     }
 
-    const sourceLines = document.markdown.split(/\r?\n/);
+    const sourceLines = document.content.split(/\r?\n/);
     const candidates = Array.from(
       readerElement.querySelectorAll<HTMLElement>("[data-mem-node-id]")
     )
@@ -2869,12 +3319,70 @@
     });
   }
 
+  function getHtmlCoveredNodes(rect: AnnotationRect): AnnotationCoveredNode[] {
+    const frameDocument = getHtmlFrameDocument();
+    if (!readerElement || !htmlFrameElement || !frameDocument) {
+      return [];
+    }
+
+    const candidates = Array.from(
+      frameDocument.querySelectorAll<HTMLElement>("[data-mem-node-id]")
+    )
+      .map((element) => {
+        const nodeRect = getHtmlElementContentRect(element);
+        const intersectionArea = getIntersectionArea(rect, nodeRect);
+        const nodeArea = nodeRect.width * nodeRect.height;
+        return {
+          element,
+          intersectionArea,
+          intersectionRatio: nodeArea > 0 ? intersectionArea / nodeArea : 0
+        };
+      })
+      .filter((item) => item.intersectionArea > 1)
+      .sort((a, b) => {
+        const aRect = getHtmlElementContentRect(a.element);
+        const bRect = getHtmlElementContentRect(b.element);
+        return aRect.top - bRect.top || aRect.left - bRect.left;
+      });
+
+    const primary = candidates.reduce<(typeof candidates)[number] | null>(
+      (best, item) => !best || item.intersectionArea > best.intersectionArea ? item : best,
+      null
+    );
+
+    return candidates.map((item) => ({
+      nodeId: item.element.dataset.memNodeId ?? "",
+      type: item.element.dataset.nodeType ?? item.element.tagName.toLowerCase(),
+      sourceLines: null,
+      headingPath: getHtmlHeadingPathForElement(item.element),
+      textExcerpt: getHtmlElementTextExcerpt(item.element),
+      intersectionRatio: roundNumber(item.intersectionRatio),
+      isPrimary: item === primary
+    }));
+  }
+
   function getElementContentRect(element: HTMLElement) {
     const readerBounds = readerElement?.getBoundingClientRect();
     const bounds = element.getBoundingClientRect();
     return {
       left: roundNumber(bounds.left - (readerBounds?.left ?? 0) + (readerElement?.scrollLeft ?? 0)),
       top: roundNumber(bounds.top - (readerBounds?.top ?? 0) + (readerElement?.scrollTop ?? 0)),
+      width: roundNumber(bounds.width),
+      height: roundNumber(bounds.height)
+    };
+  }
+
+  function getHtmlElementContentRect(element: HTMLElement) {
+    const readerBounds = readerElement?.getBoundingClientRect();
+    const frameBounds = htmlFrameElement?.getBoundingClientRect();
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: roundNumber(
+        (frameBounds?.left ?? 0) + bounds.left - (readerBounds?.left ?? 0) + (readerElement?.scrollLeft ?? 0)
+      ),
+      top: roundNumber(
+        (frameBounds?.top ?? 0) + bounds.top - (readerBounds?.top ?? 0) + (readerElement?.scrollTop ?? 0)
+      ),
       width: roundNumber(bounds.width),
       height: roundNumber(bounds.height)
     };
@@ -2912,6 +3420,13 @@
     return limitExcerpt(normalizeExcerpt(sourceText || renderedText));
   }
 
+  function getHtmlElementTextExcerpt(element: HTMLElement) {
+    const text = element.tagName.toLowerCase() === "img"
+      ? element.getAttribute("alt") || element.getAttribute("title") || element.getAttribute("src") || ""
+      : element.innerText || element.textContent || "";
+    return limitExcerpt(normalizeExcerpt(text));
+  }
+
   function normalizeExcerpt(value: string) {
     return value.replace(/\s+/g, " ").trim();
   }
@@ -2942,6 +3457,32 @@
       }
       path.length = Math.max(0, level - 1);
       path[level - 1] = normalizeExcerpt(heading.textContent ?? "");
+    }
+
+    return path.filter(Boolean);
+  }
+
+  function getHtmlHeadingPathForElement(element: HTMLElement) {
+    const frameDocument = getHtmlFrameDocument();
+    if (!frameDocument) {
+      return [];
+    }
+
+    const path: string[] = [];
+    const headings = Array.from(frameDocument.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"));
+    for (const heading of headings) {
+      const relation = heading.compareDocumentPosition(element);
+      const isBeforeOrSame = heading === element || Boolean(relation & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (!isBeforeOrSame) {
+        continue;
+      }
+
+      const level = Number(heading.tagName.slice(1));
+      if (!Number.isFinite(level) || level < 1) {
+        continue;
+      }
+      path.length = Math.max(0, level - 1);
+      path[level - 1] = normalizeExcerpt(heading.innerText || heading.textContent || "");
     }
 
     return path.filter(Boolean);
@@ -3604,9 +4145,9 @@
         class="ghost icon-button"
         type="button"
         disabled={repoBusy}
-        aria-label={t.openMarkdownFile}
-        title={t.openMarkdownFile}
-        on:click={browseMarkdownFile}
+        aria-label={t.openDocumentFile}
+        title={t.openDocumentFile}
+        on:click={browseDocumentFile}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
@@ -3665,7 +4206,7 @@
           <path d="M12 12v6" />
           <path d="m9 15 3 3 3-3" />
         </svg>
-        <span>{t.dropMarkdownFile}</span>
+        <span>{t.dropDocumentFile}</span>
       </div>
     </div>
   {/if}
@@ -3712,7 +4253,7 @@
     <div class="brand">
       <div>
         <h1>{repoName(repoPath) || t.memoryRepo}</h1>
-        <p>{snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
+        <p>{snapshot?.counts.documents ?? snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
       </div>
     </div>
 
@@ -3815,7 +4356,12 @@
       <div class="reader-head-main">
         <div class="reader-title">
           <div class="eyebrow">{formatKind(headerKind)}</div>
-          <h2>{headerTitle}</h2>
+          <div class="reader-title-line">
+            <h2>{headerTitle}</h2>
+            {#if headerUpdatedAt}
+              <span class="reader-updated-at">{headerUpdatedAt}</span>
+            {/if}
+          </div>
           <div class="reader-path-row">
             <p class="reader-path">{headerPath}</p>
             {#if current?.path}
@@ -3964,13 +4510,26 @@
           class="reader"
           class:annotating={annotationMode}
           class:capturing={annotationCaptureHidden}
+          class:html-document={activeRendererId === "html"}
           bind:this={readerElement}
           on:pointerdown={handleReaderPointerDown}
           on:pointermove={handleReaderPointerMove}
           on:pointerup={handleReaderPointerUp}
           on:pointercancel={handleReaderPointerCancel}
         >
-          {@html renderedHtml}
+          {#if activeRendererId === "html"}
+            <iframe
+              class="html-reader-frame"
+              title={current.title}
+              srcdoc={htmlFrameSrcdoc}
+              sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups"
+              scrolling="no"
+              bind:this={htmlFrameElement}
+              on:load={handleHtmlFrameLoad}
+            ></iframe>
+          {:else}
+            {@html renderedHtml}
+          {/if}
           {#each currentAnnotations as annotation (annotation.id)}
             {@const notePlacement = annotationNotePlacement(annotation)}
             <div
@@ -4051,8 +4610,8 @@
             <button class="repo-open" type="button" disabled={repoBusy} on:click={browseRepo}>
               {t.chooseNewRepo}
             </button>
-            <button class="ghost" type="button" disabled={repoBusy} on:click={browseMarkdownFile}>
-              {t.openMarkdownFile}
+            <button class="ghost" type="button" disabled={repoBusy} on:click={browseDocumentFile}>
+              {t.openDocumentFile}
             </button>
           </div>
         </section>
@@ -4104,11 +4663,13 @@
         <h3>{t.file}</h3>
         <dl>
           <dt>{t.kind}</dt>
-          <dd>{formatKind(activeViewIsFile ? "markdown_file" : current?.kind)}</dd>
+          <dd>{current ? formatKind(getDocumentDisplayKind(current, activeViewIsFile)) : "-"}</dd>
           <dt>{t.path}</dt>
           <dd>{activeViewIsFile ? current?.path ?? "-" : current?.relative_path ?? "-"}</dd>
-          <dt>{t.mermaid}</dt>
-          <dd>{current?.has_mermaid ? t.yes : t.no}</dd>
+          {#if current?.content_type === "markdown"}
+            <dt>{t.mermaid}</dt>
+            <dd>{current.has_mermaid ? t.yes : t.no}</dd>
+          {/if}
         </dl>
       </section>
     </aside>

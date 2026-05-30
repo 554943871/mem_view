@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize)]
@@ -25,7 +26,9 @@ struct GitPullResult {
 
 #[derive(Debug, Serialize)]
 struct RepoCounts {
+    documents: usize,
     markdown: usize,
+    html: usize,
     mermaid: usize,
     requirements: usize,
 }
@@ -37,6 +40,8 @@ struct DocMeta {
     path: String,
     relative_path: String,
     kind: String,
+    content_type: String,
+    modified_at_unix_ms: u64,
     has_mermaid: bool,
 }
 
@@ -56,7 +61,9 @@ struct Document {
     path: String,
     relative_path: String,
     kind: String,
-    markdown: String,
+    content: String,
+    content_type: String,
+    modified_at_unix_ms: u64,
     has_mermaid: bool,
     read_chain: Vec<ChainItem>,
 }
@@ -183,10 +190,10 @@ struct AnnotationBundlePaths {
     readme_path: PathBuf,
 }
 
-const ANNOTATION_EXPORT_TASK: &str = "根据 memView 标注处理对应 Markdown 规格文档。";
+const ANNOTATION_EXPORT_TASK: &str = "根据 memView 标注处理对应规格文档。";
 const ANNOTATION_EXPORT_WORK_REQUIREMENTS: &[&str] = &[
     "先读取本 README.md，再理解 annotations.json 中的 documents[].path、annotations[].note、coveredNodes、rect 和 visualEvidence。",
-    "再读取 documents[].path 指向的原 Markdown 文件。",
+    "再读取 documents[].path 指向的原文档文件。",
     "优先使用 coveredNodes[].sourceLines、headingPath 和 textExcerpt 定位标注对应的规格内容；rect 只作为视觉辅助，不要只凭坐标判断。",
     "对每条 annotations[].note 先判断意图：如果 note 明确要求修正、补充、删除、改写或同步规格内容，才按该要求做最小范围修改。",
     "如果 note 是问题、求解释、求确认、求分析，或修改意图不明确，只基于对应文档内容回答问题，不要改文件。",
@@ -198,11 +205,13 @@ const ANNOTATION_EXPORT_WORK_REQUIREMENTS: &[&str] = &[
 #[tauri::command]
 fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
     let root = normalize_repo_path(&repo_path)?;
-    let mut docs = scan_markdown_docs(&root)?;
+    let mut docs = scan_documents(&root)?;
     docs.sort_by(|a, b| sort_key(&a.relative_path).cmp(&sort_key(&b.relative_path)));
 
     let counts = RepoCounts {
-        markdown: docs.len(),
+        documents: docs.len(),
+        markdown: docs.iter().filter(|doc| doc.content_type == "markdown").count(),
+        html: docs.iter().filter(|doc| doc.content_type == "html").count(),
         mermaid: docs.iter().filter(|doc| doc.has_mermaid).count(),
         requirements: count_requirements(&root),
     };
@@ -255,20 +264,25 @@ fn read_document(repo_path: String, path: String) -> Result<Document, String> {
         .to_string();
     let read_chain = build_read_chain(&root, &relative_path);
 
-    read_markdown_document(&requested, relative_path, read_chain)
+    read_document_file(&requested, relative_path, read_chain)
+}
+
+#[tauri::command]
+fn read_standalone_document(path: String) -> Result<Document, String> {
+    let requested = PathBuf::from(path.trim());
+    let requested = canonical_readable_document_file(&requested)?;
+    let relative_path = requested
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document")
+        .to_string();
+
+    read_document_file(&requested, relative_path, Vec::new())
 }
 
 #[tauri::command]
 fn read_markdown_file(path: String) -> Result<Document, String> {
-    let requested = PathBuf::from(path.trim());
-    let requested = canonical_readable_markdown_file(&requested)?;
-    let relative_path = requested
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Markdown.md")
-        .to_string();
-
-    read_markdown_document(&requested, relative_path, Vec::new())
+    read_standalone_document(path)
 }
 
 #[tauri::command]
@@ -495,16 +509,16 @@ fn build_annotation_readme(
 
 ## 字段说明
 
-- `documents[].path`：被标注的原 Markdown 文档绝对路径，处理前必须读取。
+- `documents[].path`：被标注的原文档绝对路径，处理前必须读取。
 - `annotations[].note`：用户写下的标注意图原文，它是判断要修改、回答还是确认的最高优先级输入。
 - `annotations[].coveredNodes`：memView 根据框选区域推断出的候选文档节点，不是绝对真相。
-- `coveredNodes[].sourceLines`、`textExcerpt`、`headingPath`：优先用于定位 Markdown 源文；优先级高于截图。
+- `coveredNodes[].sourceLines`、`textExcerpt`、`headingPath`：优先用于定位源文；HTML 文档可能没有 sourceLines，优先级高于截图。
 - `annotations[].rect`：用户框选区域在 reader 内容坐标系里的位置，不是屏幕坐标。
 - `annotations[].visualEvidence`：截图辅助信息。`screenshotPath` 指向局部 PNG；`captureRect` 是生成截图时使用的屏幕坐标；`captureStatus` 为 `captured` 才表示截图可用。
 
 ## 视觉证据使用原则
 
-- 截图只用于确认视觉上下文，不能替代 Markdown 源文和 `sourceLines`。
+- 截图只用于确认视觉上下文，不能替代源文、`textExcerpt` 和可用的 `sourceLines`。
 - Mermaid、表格、图片等复杂排版场景，可以用截图和图内文字判断用户实际框选的局部。
 - Mermaid 的源码修改仍以 Markdown 中的 Mermaid 代码块为准；截图只是帮助判断具体节点、边或说明文字。
 - 如果 `captureStatus` 是 `unavailable`，忽略截图并根据 `note`、`coveredNodes` 和原文处理。
@@ -562,7 +576,7 @@ fn annotation_temp_dir_path(base: &Path, timestamp_millis: u128) -> PathBuf {
 
 fn build_annotation_prompt(readme_path: &str) -> String {
     format!(
-        "请先读取并严格执行 memView 标注目录中的 README.md：\n{}\n\n再结合同目录 annotations.json 和 images/ 里的截图证据处理对应 Markdown 文档。",
+        "请先读取并严格执行 memView 标注目录中的 README.md：\n{}\n\n再结合同目录 annotations.json 和 images/ 里的截图证据处理对应文档。",
         readme_path
     )
 }
@@ -725,15 +739,17 @@ fn unix_timestamp_millis() -> u128 {
         .unwrap_or_default()
 }
 
-fn read_markdown_document(
+fn read_document_file(
     requested: &Path,
     relative_path: String,
     read_chain: Vec<ChainItem>,
 ) -> Result<Document, String> {
-    let markdown = fs::read_to_string(&requested)
+    let content_type = document_content_type(requested)
+        .ok_or_else(|| format!("不支持的文档类型：{}", requested.display()))?;
+    let content = fs::read_to_string(&requested)
         .map_err(|err| format!("读取文档失败：{} ({})", requested.display(), err))?;
-    let title = extract_title(&markdown).unwrap_or_else(|| fallback_title(&requested));
-    let has_mermaid = markdown.contains("```mermaid");
+    let title = extract_document_title(&content, content_type).unwrap_or_else(|| fallback_title(&requested));
+    let has_mermaid = content_type == "markdown" && content.contains("```mermaid");
 
     Ok(Document {
         id: relative_path.clone(),
@@ -741,7 +757,9 @@ fn read_markdown_document(
         path: requested.to_string_lossy().to_string(),
         relative_path: relative_path.clone(),
         kind: classify_doc(&relative_path),
-        markdown,
+        content,
+        content_type: content_type.to_string(),
+        modified_at_unix_ms: file_modified_unix_ms(requested),
         has_mermaid,
         read_chain,
     })
@@ -790,7 +808,7 @@ fn command_output_text(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
-fn scan_markdown_docs(root: &Path) -> Result<Vec<DocMeta>, String> {
+fn scan_documents(root: &Path) -> Result<Vec<DocMeta>, String> {
     let mut docs = Vec::new();
 
     for entry in WalkDir::new(root)
@@ -799,7 +817,10 @@ fn scan_markdown_docs(root: &Path) -> Result<Vec<DocMeta>, String> {
     {
         let entry = entry.map_err(|err| format!("扫描文件失败：{}", err))?;
         let path = entry.path();
-        if !entry.file_type().is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+        let Some(content_type) = document_content_type(path) else {
+            continue;
+        };
+        if !entry.file_type().is_file() {
             continue;
         }
 
@@ -808,16 +829,18 @@ fn scan_markdown_docs(root: &Path) -> Result<Vec<DocMeta>, String> {
             .map_err(|_| "路径解析失败".to_string())?
             .to_string_lossy()
             .to_string();
-        let markdown = fs::read_to_string(path).unwrap_or_default();
-        let title = extract_title(&markdown).unwrap_or_else(|| fallback_title(path));
+        let content = fs::read_to_string(path).unwrap_or_default();
+        let title = extract_document_title(&content, content_type).unwrap_or_else(|| fallback_title(path));
 
         docs.push(DocMeta {
             id: relative_path.clone(),
             title,
             path: path.to_string_lossy().to_string(),
             kind: classify_doc(&relative_path),
+            content_type: content_type.to_string(),
+            modified_at_unix_ms: file_modified_unix_ms(path),
             relative_path,
-            has_mermaid: markdown.contains("```mermaid"),
+            has_mermaid: content_type == "markdown" && content.contains("```mermaid"),
         });
     }
 
@@ -958,10 +981,11 @@ fn push_chain(chain: &mut Vec<ChainItem>, label: &str, path: PathBuf) {
     if !path.exists() {
         return;
     }
-    let markdown = fs::read_to_string(&path).unwrap_or_default();
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    let content_type = document_content_type(&path).unwrap_or("markdown");
     chain.push(ChainItem {
         label: label.to_string(),
-        title: extract_title(&markdown).unwrap_or_else(|| fallback_title(&path)),
+        title: extract_document_title(&content, content_type).unwrap_or_else(|| fallback_title(&path)),
         path: path.to_string_lossy().to_string(),
     });
 }
@@ -976,24 +1000,50 @@ fn canonical_readable_child(root: &Path, requested: &Path) -> Result<PathBuf, St
     Ok(canonical)
 }
 
-fn canonical_readable_markdown_file(requested: &Path) -> Result<PathBuf, String> {
+fn canonical_readable_document_file(requested: &Path) -> Result<PathBuf, String> {
     let canonical = requested
         .canonicalize()
-        .map_err(|err| format!("Markdown 文件不存在或不可读：{} ({})", requested.display(), err))?;
+        .map_err(|err| format!("文档文件不存在或不可读：{} ({})", requested.display(), err))?;
     if !canonical.is_file() {
-        return Err(format!("Markdown 路径不是文件：{}", canonical.display()));
+        return Err(format!("文档路径不是文件：{}", canonical.display()));
     }
-    let extension = canonical
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default();
-    if !extension.eq_ignore_ascii_case("md") {
-        return Err(format!("只能打开 Markdown 文件：{}", canonical.display()));
+    if document_content_type(&canonical).is_none() {
+        return Err(format!("只能打开 Markdown 或 HTML 文件：{}", canonical.display()));
     }
     Ok(canonical)
 }
 
-fn extract_title(markdown: &str) -> Option<String> {
+fn document_content_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "md" => Some("markdown"),
+        "html" | "htm" => Some("html"),
+        _ => None,
+    }
+}
+
+fn file_modified_unix_ms(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+fn extract_document_title(content: &str, content_type: &str) -> Option<String> {
+    match content_type {
+        "html" => extract_html_title(content),
+        _ => extract_markdown_title(content),
+    }
+}
+
+fn extract_markdown_title(markdown: &str) -> Option<String> {
     for line in markdown.lines() {
         let trimmed = line.trim();
         if let Some(title) = trimmed.strip_prefix("title:") {
@@ -1004,6 +1054,62 @@ fn extract_title(markdown: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_html_title(html: &str) -> Option<String> {
+    extract_html_tag_text(html, "title")
+        .or_else(|| extract_html_tag_text(html, "h1"))
+}
+
+fn extract_html_tag_text(html: &str, tag: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let open_pattern = format!("<{}", tag);
+    let mut search_from = 0;
+
+    while let Some(open_start) = lower[search_from..].find(&open_pattern) {
+        let open_start = search_from + open_start;
+        let after_tag = lower.as_bytes().get(open_start + open_pattern.len()).copied();
+        if !matches!(after_tag, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')) {
+            search_from = open_start + open_pattern.len();
+            continue;
+        }
+        let Some(open_end_offset) = lower[open_start..].find('>') else {
+            return None;
+        };
+        let content_start = open_start + open_end_offset + 1;
+        let close_pattern = format!("</{}>", tag);
+        let Some(close_offset) = lower[content_start..].find(&close_pattern) else {
+            return None;
+        };
+        let content_end = content_start + close_offset;
+        return clean_html_text(&html[content_start..content_end]);
+    }
+
+    None
+}
+
+fn clean_html_text(value: &str) -> Option<String> {
+    let mut text = String::new();
+    let mut in_tag = false;
+
+    for character in value.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+
+    let decoded = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    let normalized = decoded.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(normalized).filter(|value| !value.is_empty())
 }
 
 fn fallback_title(path: &Path) -> String {
@@ -1061,6 +1167,7 @@ pub fn run() {
             scan_repo,
             pull_repo,
             read_document,
+            read_standalone_document,
             read_markdown_file,
             finish_annotation_export,
             copy_svg_to_clipboard,
@@ -1082,7 +1189,9 @@ mod tests {
             scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
 
         assert_eq!(snapshot.root_path, root.to_string_lossy().to_string());
+        assert_eq!(snapshot.counts.documents, 6);
         assert_eq!(snapshot.counts.markdown, 4);
+        assert_eq!(snapshot.counts.html, 2);
         assert_eq!(snapshot.counts.mermaid, 1);
         assert!(snapshot
             .docs
@@ -1098,6 +1207,18 @@ mod tests {
             find_tree_node(&snapshot.tree, "baseline/10-standards/rules.md")
                 .map(|node| node.title.as_str()),
             Some("rules.md")
+        );
+        assert_eq!(
+            find_tree_node(&snapshot.tree, "baseline/overview.html").map(|node| node.title.as_str()),
+            Some("overview.html")
+        );
+        assert_eq!(
+            snapshot
+                .docs
+                .iter()
+                .find(|doc| doc.relative_path == "baseline/overview.html")
+                .map(|doc| (doc.title.as_str(), doc.content_type.as_str(), doc.modified_at_unix_ms > 0)),
+            Some(("Baseline Overview", "html", true))
         );
     }
 
@@ -1162,37 +1283,68 @@ mod tests {
         .expect("baseline README should read");
 
         assert_eq!(doc.kind, "baseline");
-        assert!(doc.markdown.contains("# "));
+        assert_eq!(doc.content_type, "markdown");
+        assert!(doc.modified_at_unix_ms > 0);
+        assert!(doc.content.contains("# "));
         assert_eq!(doc.read_chain.len(), 1);
     }
 
     #[test]
-    fn reads_standalone_markdown_file() {
+    fn reads_standalone_document_file() {
         let root = build_temp_dir("standalone");
         fs::create_dir_all(&root).expect("standalone test dir should create");
         let path = root.join("loose-note.md");
         fs::write(&path, "# Loose Note\n\nStandalone markdown.\n")
             .expect("standalone markdown should write");
 
-        let doc = read_markdown_file(path.to_string_lossy().to_string())
-            .expect("standalone markdown should read");
+        let doc = read_standalone_document(path.to_string_lossy().to_string())
+            .expect("standalone document should read");
 
         assert_eq!(doc.title, "Loose Note");
+        assert_eq!(doc.content_type, "markdown");
+        assert!(doc.modified_at_unix_ms > 0);
         assert_eq!(doc.relative_path, "loose-note.md");
         assert!(doc.read_chain.is_empty());
     }
 
     #[test]
-    fn rejects_standalone_non_markdown_file() {
+    fn reads_standalone_html_file() {
+        let root = build_temp_dir("standalone-html");
+        fs::create_dir_all(&root).expect("standalone test dir should create");
+        let path = root.join("preview.html");
+        fs::write(&path, "<!doctype html><title>Preview Doc</title><h1>Fallback</h1>\n")
+            .expect("html file should write");
+
+        let doc = read_standalone_document(path.to_string_lossy().to_string())
+            .expect("standalone html should read");
+
+        assert_eq!(doc.title, "Preview Doc");
+        assert_eq!(doc.content_type, "html");
+        assert!(doc.modified_at_unix_ms > 0);
+        assert_eq!(doc.relative_path, "preview.html");
+        assert!(doc.read_chain.is_empty());
+    }
+
+    #[test]
+    fn extracts_html_h1_title_when_title_is_missing() {
+        assert_eq!(
+            extract_document_title("<html><body><h1>HTML Heading</h1></body></html>", "html")
+                .as_deref(),
+            Some("HTML Heading")
+        );
+    }
+
+    #[test]
+    fn rejects_standalone_unsupported_file() {
         let root = build_temp_dir("standalone-txt");
         fs::create_dir_all(&root).expect("standalone test dir should create");
         let path = root.join("note.txt");
         fs::write(&path, "not markdown").expect("text file should write");
 
-        let err = read_markdown_file(path.to_string_lossy().to_string())
-            .expect_err("non-markdown file should be rejected");
+        let err = read_standalone_document(path.to_string_lossy().to_string())
+            .expect_err("unsupported file should be rejected");
 
-        assert!(err.contains("Markdown"));
+        assert!(err.contains("Markdown 或 HTML"));
     }
 
     #[test]
@@ -1333,6 +1485,16 @@ mod tests {
         .expect("baseline README should write");
         fs::write(root.join("baseline/10-standards/rules.md"), "# Rules\n")
             .expect("rules doc should write");
+        fs::write(
+            root.join("baseline/overview.html"),
+            "<!doctype html><title>Baseline Overview</title><h1>Baseline HTML</h1>\n",
+        )
+        .expect("baseline html should write");
+        fs::write(
+            root.join("requirements/R001/brief.htm"),
+            "<!doctype html><h1>Requirement Brief</h1>\n",
+        )
+        .expect("requirement html should write");
         fs::write(root.join("requirements/R001/tasks/T001/README.md"), "# Task\n")
             .expect("task README should write");
 
