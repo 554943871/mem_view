@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.18
+
+- Added a header action to copy the current document's full local file path.
+- Remembered each memory repository's open document, folder expansion state, and reader scroll position when switching repositories.
+- Added recovery guards so failed repository switches keep the previous view and startup can reopen the most recent repository.
+
 ## v0.2.17
 
 - Changed annotation export to create a temporary bundle directory with a README, structured JSON, and image evidence.

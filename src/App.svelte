@@ -158,6 +158,12 @@
   type OpenDocumentOptions = {
     restoreScrollTop?: number;
   };
+  type RepoViewState = {
+    currentRelativePath: string;
+    collapsedFolderIds: string[];
+    scrollTop: number;
+    updatedAtUnixMs: number;
+  };
   type NavigationEntry = {
     type: ViewType;
     path: string;
@@ -247,6 +253,9 @@
     copyingDiagram: string;
     copiedDiagram: string;
     copyDiagramFailed: string;
+    copyDocumentPath: string;
+    copiedDocumentPath: string;
+    copyDocumentPathFailed: string;
     findDocument: string;
     findPlaceholder: string;
     findPrevious: string;
@@ -276,9 +285,11 @@
   const localeStorageKey = "memView.locale";
   const repoPathStorageKey = "memView.repoPath";
   const recentRepoPathsStorageKey = "memView.recentRepoPaths";
+  const repoViewStatesStorageKey = "memView.repoViewStates";
   const repoViewId = "repo";
   const fileViewPrefix = "file:";
   const recentRepoLimit = 8;
+  const repoViewStateLimit = 24;
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
@@ -353,6 +364,9 @@
       copyingDiagram: "复制中",
       copiedDiagram: "已复制",
       copyDiagramFailed: "复制失败",
+      copyDocumentPath: "复制完整路径",
+      copiedDocumentPath: "完整路径已复制",
+      copyDocumentPathFailed: "路径复制失败",
       findDocument: "查找当前文档",
       findPlaceholder: "查找当前文档",
       findPrevious: "上一个匹配",
@@ -478,6 +492,9 @@
       copyingDiagram: "Copying",
       copiedDiagram: "Copied",
       copyDiagramFailed: "Copy failed",
+      copyDocumentPath: "Copy full path",
+      copiedDocumentPath: "Full path copied",
+      copyDocumentPathFailed: "Path copy failed",
       findDocument: "Find in document",
       findPlaceholder: "Find in current document",
       findPrevious: "Previous match",
@@ -682,6 +699,8 @@
   let collapsedFolderIds = new Set<string>();
   let recentRepoPaths = getInitialRecentRepoPaths(repoPath);
   let selectedRecentRepoPath = recentRepoPaths[0] ?? repoPath;
+  let repoViewStates = getInitialRepoViewStates();
+  let autoLoadingRecentRepoPath = "";
   let sidebarOpen = false;
   let contextOpen = true;
   let zoomedDiagramHtml = "";
@@ -749,21 +768,35 @@
   $: finishAnnotationButtonLabel = currentAnnotations.length
     ? `${t.finishAnnotations} ${currentAnnotations.length}`
     : t.finishAnnotations;
+  $: if (
+    !repoPath &&
+    !snapshot &&
+    !current &&
+    status === "idle" &&
+    selectedRecentRepoPath &&
+    autoLoadingRecentRepoPath !== selectedRecentRepoPath
+  ) {
+    autoLoadingRecentRepoPath = selectedRecentRepoPath;
+    void loadRepo(selectedRecentRepoPath);
+  }
 
   onMount(() => {
     document.documentElement.lang = locale;
     document.addEventListener("click", handleDocumentClick);
     window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("beforeunload", handleBeforeUnload);
     void setupDragDrop();
     void checkForUpdates({ notifyNoUpdate: false, notifyError: false });
-    if (repoPath) {
-      void loadRepo(repoPath);
+    const initialPath = repoPath || selectedRecentRepoPath;
+    if (initialPath) {
+      void loadRepo(initialPath);
     }
   });
 
   onDestroy(() => {
     document.removeEventListener("click", handleDocumentClick);
     window.removeEventListener("resize", handleWindowResize);
+    window.removeEventListener("beforeunload", handleBeforeUnload);
     dragDropUnlisten?.();
     if (copyDiagramResetTimer !== null) {
       window.clearTimeout(copyDiagramResetTimer);
@@ -775,6 +808,10 @@
       console.warn("Failed to close pending update", err);
     });
   });
+
+  function handleBeforeUnload() {
+    saveCurrentRepoViewState();
+  }
 
   async function setupDragDrop() {
     try {
@@ -831,7 +868,7 @@
       return "";
     }
 
-    return localStorage.getItem(repoPathStorageKey) ?? "";
+    return localStorage.getItem(repoPathStorageKey) ?? parseStoredRecentRepoPaths()[0] ?? "";
   }
 
   function getInitialRecentRepoPaths(initialRepoPath: string) {
@@ -878,6 +915,104 @@
       localStorage.setItem(repoPathStorageKey, path);
       localStorage.setItem(recentRepoPathsStorageKey, JSON.stringify(recentRepoPaths));
     }
+  }
+
+  function getInitialRepoViewStates() {
+    const states = new Map<string, RepoViewState>();
+    if (typeof localStorage === "undefined") {
+      return states;
+    }
+
+    try {
+      const parsed = JSON.parse(localStorage.getItem(repoViewStatesStorageKey) ?? "[]");
+      const entries = Array.isArray(parsed) ? parsed : Object.entries(parsed);
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || typeof entry[0] !== "string") {
+          continue;
+        }
+
+        const state = parseRepoViewState(entry[1]);
+        const key = repoViewStateKey(entry[0]);
+        if (key && state) {
+          states.set(key, state);
+        }
+      }
+    } catch {
+      return new Map();
+    }
+
+    return states;
+  }
+
+  function parseRepoViewState(value: unknown): RepoViewState | null {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const collapsedFolderIds = Array.isArray(record.collapsedFolderIds)
+      ? record.collapsedFolderIds.filter((id): id is string => typeof id === "string")
+      : [];
+
+    return {
+      currentRelativePath: typeof record.currentRelativePath === "string"
+        ? record.currentRelativePath
+        : "",
+      collapsedFolderIds,
+      scrollTop: typeof record.scrollTop === "number" && Number.isFinite(record.scrollTop)
+        ? record.scrollTop
+        : 0,
+      updatedAtUnixMs: typeof record.updatedAtUnixMs === "number" && Number.isFinite(record.updatedAtUnixMs)
+        ? record.updatedAtUnixMs
+        : 0
+    };
+  }
+
+  function repoViewStateKey(path: string) {
+    return normalizePathname(path.trim());
+  }
+
+  function getRepoViewState(path: string) {
+    return repoViewStates.get(repoViewStateKey(path)) ?? null;
+  }
+
+  function saveCurrentRepoViewState(scrollTop = getReaderScrollTop()) {
+    if (!repoPath || !snapshot) {
+      return;
+    }
+
+    const key = repoViewStateKey(repoPath);
+    if (!key) {
+      return;
+    }
+
+    const previous = repoViewStates.get(key);
+    const next = new Map(repoViewStates);
+    next.set(key, {
+      currentRelativePath: repoCurrent?.relative_path ?? previous?.currentRelativePath ?? "",
+      collapsedFolderIds: Array.from(collapsedFolderIds),
+      scrollTop,
+      updatedAtUnixMs: Date.now()
+    });
+
+    repoViewStates = trimRepoViewStates(next);
+    persistRepoViewStates();
+  }
+
+  function trimRepoViewStates(states: Map<string, RepoViewState>) {
+    return new Map(
+      Array.from(states.entries())
+        .sort((entryA, entryB) => entryB[1].updatedAtUnixMs - entryA[1].updatedAtUnixMs)
+        .slice(0, repoViewStateLimit)
+    );
+  }
+
+  function persistRepoViewStates() {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
+
+    localStorage.setItem(repoViewStatesStorageKey, JSON.stringify(Array.from(repoViewStates.entries())));
   }
 
   function setLocale(nextLocale: Locale) {
@@ -1198,6 +1333,43 @@
     }, 2600);
   }
 
+  async function copyCurrentDocumentPath() {
+    if (!current?.path) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(current.path);
+      showUpdateToast(t.copiedDocumentPath);
+    } catch (err) {
+      console.warn("Copy document path failed", err);
+      showUpdateToast(`${t.copyDocumentPathFailed}: ${getErrorMessage(err)}`, "error");
+    }
+  }
+
+  async function copyTextToClipboard(text: string) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    try {
+      if (!document.execCommand("copy")) {
+        throw new Error("Browser copy command failed");
+      }
+    } finally {
+      textarea.remove();
+    }
+  }
+
   function renderUpdateNotes(source: string) {
     if (!source.trim()) {
       return "";
@@ -1254,6 +1426,14 @@
     if (!isRestoringNavigation) {
       updateCurrentHistoryScroll();
     }
+    saveCurrentRepoViewState();
+    const previousRepoPath = repoPath;
+    const previousSnapshot = snapshot;
+    const previousRepoCurrent = repoCurrent;
+    const previousCurrent = current;
+    const previousRenderedHtml = renderedHtml;
+    const previousCollapsedFolderIds = new Set(collapsedFolderIds);
+    const previousActiveViewId = activeViewId;
     const preservedRelativePath = options.preserveCurrentDocument ? repoCurrent?.relative_path : "";
     const preservedScrollTop = options.preserveCurrentDocument ? getReaderScrollTop() : undefined;
     const preservedCollapsedFolderIds = options.preserveCurrentDocument
@@ -1275,28 +1455,45 @@
     status = "indexing";
     try {
       snapshot = await invoke<RepoSnapshot>("scan_repo", { repoPath: nextRepoPath });
+      const restoredState = getRepoViewState(snapshot.root_path);
       repoPath = snapshot.root_path;
       upsertOpenView(createRepoView(snapshot.root_path));
       activeViewId = repoViewId;
-      collapsedFolderIds = preservedCollapsedFolderIds ?? getDefaultCollapsedFolderIds(snapshot.tree);
+      collapsedFolderIds = preservedCollapsedFolderIds ??
+        getRestoredCollapsedFolderIds(snapshot.tree, restoredState);
       rememberRepoPath(snapshot.root_path);
       status = "ready";
       const preservedEntry = preservedRelativePath
         ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath)
         : null;
-      const entry = preservedEntry ??
+      const restoredEntry = restoredState?.currentRelativePath
+        ? snapshot.docs.find((doc) => doc.relative_path === restoredState.currentRelativePath)
+        : null;
+      const entry = preservedEntry ?? restoredEntry ??
         snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
         snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md") ??
         snapshot.docs[0];
       if (entry) {
         await openDocument(entry.path, {
-          restoreScrollTop: preservedEntry ? preservedScrollTop : undefined
+          restoreScrollTop: preservedEntry
+            ? preservedScrollTop
+            : restoredEntry
+              ? restoredState?.scrollTop
+              : undefined
         });
       }
     } catch (err) {
-      snapshot = null;
-      repoCurrent = null;
-      if (getOpenView(activeViewId)?.type !== "file") {
+      if (previousSnapshot) {
+        repoPath = previousRepoPath;
+        snapshot = previousSnapshot;
+        repoCurrent = previousRepoCurrent;
+        current = previousCurrent;
+        renderedHtml = previousRenderedHtml;
+        collapsedFolderIds = previousCollapsedFolderIds;
+        activeViewId = previousActiveViewId;
+      } else {
+        snapshot = null;
+        repoCurrent = null;
         current = null;
         renderedHtml = "";
       }
@@ -1334,6 +1531,7 @@
           reader.scrollTop = options.restoreScrollTop;
         }
       }
+      saveCurrentRepoViewState(options.restoreScrollTop ?? getReaderScrollTop());
       recordNavigationEntry();
     } catch (err) {
       error = String(err);
@@ -1674,6 +1872,28 @@
     return collapsed;
   }
 
+  function getRestoredCollapsedFolderIds(nodes: TreeNode[], state: RepoViewState | null) {
+    if (!state) {
+      return getDefaultCollapsedFolderIds(nodes);
+    }
+
+    const folderIds = getFolderIds(nodes);
+    return new Set(state.collapsedFolderIds.filter((id) => folderIds.has(id)));
+  }
+
+  function getFolderIds(nodes: TreeNode[]) {
+    const ids = new Set<string>();
+    const visit = (node: TreeNode) => {
+      if (!node.path && node.children.length) {
+        ids.add(node.id);
+      }
+      node.children.forEach(visit);
+    };
+
+    nodes.forEach(visit);
+    return ids;
+  }
+
   function searchDocs(docs: DocMeta[], value: string): TreeNode[] {
     const needle = value.trim().toLowerCase();
     return docs
@@ -1716,6 +1936,7 @@
       next.add(node.id);
     }
     collapsedFolderIds = next;
+    saveCurrentRepoViewState();
   }
 
   function handleNodeClick(node: FlatNode) {
@@ -3595,7 +3816,23 @@
         <div class="reader-title">
           <div class="eyebrow">{formatKind(headerKind)}</div>
           <h2>{headerTitle}</h2>
-          <p>{headerPath}</p>
+          <div class="reader-path-row">
+            <p class="reader-path">{headerPath}</p>
+            {#if current?.path}
+              <button
+                class="ghost icon-button reader-path-copy"
+                type="button"
+                aria-label={t.copyDocumentPath}
+                title={t.copyDocumentPath}
+                on:click={copyCurrentDocumentPath}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="10" height="10" rx="2" />
+                  <path d="M5 15V7a2 2 0 0 1 2-2h8" />
+                </svg>
+              </button>
+            {/if}
+          </div>
         </div>
       </div>
       <div class="head-actions">

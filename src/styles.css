@@ -663,6 +663,38 @@ h1 {
   font-weight: 700;
 }
 
+.reader-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 760px;
+  min-width: 0;
+}
+
+.reader-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-path-copy {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: #69727d;
+}
+
+.reader-path-copy svg {
+  width: 14px;
+  height: 14px;
+}
+
+.reader-path-copy:hover {
+  color: #24313d;
+}
+
 .eyebrow {
   color: #718096;
   font-size: 11px;
@@ -999,6 +1031,11 @@ h1 {
 .repo-empty-actions {
   display: flex;
   gap: 10px;
+}
+
+.repo-empty-actions button {
+  min-width: 164px;
+  white-space: nowrap;
 }
 
 .reader h1,
