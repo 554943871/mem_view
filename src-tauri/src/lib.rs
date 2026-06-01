@@ -594,11 +594,14 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn capture_screen_region_to_png(rect: &AnnotationCaptureRect, path: &Path) -> Result<(), String> {
-    if !macos_screen_capture_access_granted() {
-        return Err(MACOS_SCREEN_CAPTURE_PERMISSION_ERROR.to_string());
-    }
-
-    let image = capture_screen_region_with_core_graphics(rect)?;
+    let preflight_granted = macos_screen_capture_access_granted();
+    let image = capture_screen_region_with_core_graphics(rect).map_err(|err| {
+        if preflight_granted {
+            err
+        } else {
+            format!("{}；{}", MACOS_SCREEN_CAPTURE_PERMISSION_ERROR, err)
+        }
+    })?;
     match write_cg_image_to_png(&image, path) {
         Ok(()) => Ok(()),
         Err(err) => {

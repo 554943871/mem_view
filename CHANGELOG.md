@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.25
+
+- Fixed macOS annotation screenshots when the Screen Recording preflight result is stale by attempting the in-process capture before reporting a permission error.
+
 ## v0.2.24
 
 - Fixed annotation visual evidence capture on macOS by capturing inside the memView process instead of launching `screencapture`.
