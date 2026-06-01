@@ -355,6 +355,13 @@ fn finish_annotation_export(
     })
 }
 
+#[tauri::command]
+fn capture_annotation_screenshot(capture_rect: AnnotationCaptureRect) -> Result<String, String> {
+    let screenshot_path = annotation_capture_temp_file_path(&std::env::temp_dir());
+    capture_screen_region_to_png(&capture_rect, &screenshot_path)?;
+    Ok(screenshot_path.to_string_lossy().to_string())
+}
+
 fn write_annotation_export(
     mut payload: AnnotationExportPayload,
 ) -> Result<AnnotationBundlePaths, String> {
@@ -402,13 +409,17 @@ fn finalize_annotation_visual_evidence(payload: &mut AnnotationExportPayload, im
             .visual_evidence
             .take()
             .unwrap_or_else(|| unavailable_visual_evidence(None, 0.0, "前端未提供截图区域"));
+        let supplied_screenshot_path = evidence
+            .screenshot_path
+            .clone()
+            .filter(|_| matches!(&evidence.capture_status, AnnotationCaptureStatus::Captured));
         evidence.screenshot_path = None;
         evidence.capture_status = AnnotationCaptureStatus::Unavailable;
+        let file_name = annotation_image_file_name(&annotation.id, index);
+        let screenshot_path = images_path.join(file_name);
 
-        if let Some(capture_rect) = evidence.capture_rect.clone() {
-            let file_name = annotation_image_file_name(&annotation.id, index);
-            let screenshot_path = images_path.join(file_name);
-            match capture_screen_region_to_png(&capture_rect, &screenshot_path) {
+        if let Some(source_path) = supplied_screenshot_path {
+            match copy_annotation_screenshot_to_bundle(&source_path, &screenshot_path) {
                 Ok(()) => {
                     evidence.screenshot_path = Some(screenshot_path.to_string_lossy().to_string());
                     evidence.capture_status = AnnotationCaptureStatus::Captured;
@@ -419,13 +430,48 @@ fn finalize_annotation_visual_evidence(payload: &mut AnnotationExportPayload, im
                 }
             }
         } else if evidence.capture_error.is_none() {
-            evidence.capture_error =
-                Some("标注区域不在当前可见 reader 视口内，未生成截图".to_string());
+            if let Some(capture_rect) = evidence.capture_rect.clone() {
+                match capture_screen_region_to_png(&capture_rect, &screenshot_path) {
+                    Ok(()) => {
+                        evidence.screenshot_path =
+                            Some(screenshot_path.to_string_lossy().to_string());
+                        evidence.capture_status = AnnotationCaptureStatus::Captured;
+                        evidence.capture_error = None;
+                    }
+                    Err(err) => {
+                        evidence.capture_error = Some(err);
+                    }
+                }
+            } else {
+                evidence.capture_error =
+                    Some("标注区域不在当前可见 reader 视口内，未生成截图".to_string());
+            }
         }
 
         annotation.visual_evidence = Some(evidence);
         index += 1;
     }
+}
+
+fn copy_annotation_screenshot_to_bundle(
+    source_path: &str,
+    destination_path: &Path,
+) -> Result<(), String> {
+    let source_path = PathBuf::from(source_path);
+    if !source_path.is_file() {
+        return Err(format!("截图临时文件不存在：{}", source_path.display()));
+    }
+
+    fs::copy(&source_path, destination_path)
+        .map(|_| ())
+        .map_err(|err| {
+            format!(
+                "复制标注截图失败：{} -> {} ({})",
+                source_path.display(),
+                destination_path.display(),
+                err
+            )
+        })
 }
 
 fn unavailable_visual_evidence(
@@ -459,6 +505,28 @@ fn annotation_image_file_name(annotation_id: &str, index: usize) -> String {
         sanitized
     };
     format!("{}.png", stem)
+}
+
+fn annotation_capture_temp_file_path(base: &Path) -> PathBuf {
+    let process_id = std::process::id();
+    for attempt in 0..1000 {
+        let file_name = format!(
+            "mem-view-annotation-shot-{}-{}-{}.png",
+            process_id,
+            unix_timestamp_millis(),
+            attempt
+        );
+        let candidate = base.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    base.join(format!(
+        "mem-view-annotation-shot-{}-{}.png",
+        process_id,
+        unix_timestamp_millis()
+    ))
 }
 
 fn build_annotation_readme(
@@ -1251,6 +1319,7 @@ pub fn run() {
             read_standalone_document,
             read_markdown_file,
             finish_annotation_export,
+            capture_annotation_screenshot,
             copy_svg_to_clipboard,
             copy_image_to_clipboard
         ])
@@ -1493,6 +1562,35 @@ mod tests {
         assert!(prompt.contains("annotations.json"));
         assert!(!prompt.contains("coveredNodes"));
         assert!(!prompt.contains("sourceLines"));
+    }
+
+    #[test]
+    fn writes_annotation_bundle_with_supplied_screenshot_file() {
+        let root = build_temp_dir("annotation-screenshot");
+        fs::create_dir_all(&root).expect("screenshot temp dir should create");
+        let source_path = root.join("source.png");
+        fs::write(&source_path, b"png").expect("source screenshot should write");
+
+        let mut payload = build_annotation_payload();
+        let evidence = payload.documents[0].annotations[0]
+            .visual_evidence
+            .as_mut()
+            .expect("test payload should include visual evidence");
+        evidence.screenshot_path = Some(source_path.to_string_lossy().to_string());
+        evidence.capture_status = AnnotationCaptureStatus::Captured;
+        evidence.capture_error = None;
+
+        let bundle = write_annotation_export(payload).expect("annotation bundle should write");
+        let bundled_screenshot = bundle.directory_path.join("images").join("ann-1.png");
+        let json = fs::read_to_string(&bundle.annotations_path)
+            .expect("annotation JSON should be readable");
+
+        assert_eq!(
+            fs::read(&bundled_screenshot).expect("bundled screenshot should be readable"),
+            b"png"
+        );
+        assert!(json.contains("\"captureStatus\": \"captured\""));
+        assert!(json.contains(&bundled_screenshot.to_string_lossy().to_string()));
     }
 
     #[test]

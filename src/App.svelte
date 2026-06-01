@@ -3322,27 +3322,30 @@
         getCurrentWebview().position(),
         getCurrentWindow().scaleFactor()
       ]);
-      for (const annotation of annotations) {
-        const captureRect = getAnnotationScreenCaptureRect(
-          annotation.rect,
-          webviewPosition.x,
-          webviewPosition.y,
-          scaleFactor
-        );
-        evidenceById.set(
-          annotation.id,
-          captureRect
-            ? {
-                screenshotPath: null,
-                capturePadding: ANNOTATION_CAPTURE_PADDING,
-                captureRect,
-                captureStatus: "unavailable",
-                captureError: null
-              }
-            : unavailableAnnotationVisualEvidence(
-                "标注区域不在当前可见 reader 视口内，未生成截图"
-              )
-        );
+      const originalScrollTop = readerElement.scrollTop;
+      const originalScrollLeft = readerElement.scrollLeft;
+      try {
+        for (const annotation of annotations) {
+          await scrollAnnotationIntoCaptureView(annotation.rect);
+          const captureRect = getAnnotationScreenCaptureRect(
+            annotation.rect,
+            webviewPosition.x,
+            webviewPosition.y,
+            scaleFactor
+          );
+          evidenceById.set(
+            annotation.id,
+            captureRect
+              ? await captureAnnotationVisualEvidence(captureRect)
+              : unavailableAnnotationVisualEvidence(
+                  "标注区域无法滚动到当前 reader 视口内，未生成截图"
+                )
+          );
+        }
+      } finally {
+        readerElement.scrollTop = originalScrollTop;
+        readerElement.scrollLeft = originalScrollLeft;
+        await nextAnimationFrame();
       }
     } catch (err) {
       const message = `计算截图区域失败：${getErrorMessage(err)}`;
@@ -3352,6 +3355,63 @@
     }
 
     return evidenceById;
+  }
+
+  async function captureAnnotationVisualEvidence(
+    captureRect: AnnotationCaptureRect
+  ): Promise<AnnotationVisualEvidence> {
+    try {
+      const screenshotPath = await invoke<string>("capture_annotation_screenshot", {
+        captureRect
+      });
+      return {
+        screenshotPath,
+        capturePadding: ANNOTATION_CAPTURE_PADDING,
+        captureRect,
+        captureStatus: "captured",
+        captureError: null
+      };
+    } catch (err) {
+      return {
+        screenshotPath: null,
+        capturePadding: ANNOTATION_CAPTURE_PADDING,
+        captureRect,
+        captureStatus: "unavailable",
+        captureError: `生成截图失败：${getErrorMessage(err)}`
+      };
+    }
+  }
+
+  async function scrollAnnotationIntoCaptureView(rect: AnnotationRect) {
+    if (!readerElement) {
+      return;
+    }
+
+    const target = getAnnotationCaptureScrollPosition(rect);
+    readerElement.scrollTop = target.top;
+    readerElement.scrollLeft = target.left;
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+  }
+
+  function getAnnotationCaptureScrollPosition(rect: AnnotationRect) {
+    if (!readerElement) {
+      return { top: 0, left: 0 };
+    }
+
+    const maxTop = Math.max(0, readerElement.scrollHeight - readerElement.clientHeight);
+    const maxLeft = Math.max(0, readerElement.scrollWidth - readerElement.clientWidth);
+    const desiredTop = rect.height + ANNOTATION_CAPTURE_PADDING * 2 <= readerElement.clientHeight
+      ? rect.top - Math.max(0, (readerElement.clientHeight - rect.height) / 2)
+      : rect.top - ANNOTATION_CAPTURE_PADDING;
+    const desiredLeft = rect.width + ANNOTATION_CAPTURE_PADDING * 2 <= readerElement.clientWidth
+      ? rect.left - Math.max(0, (readerElement.clientWidth - rect.width) / 2)
+      : rect.left - ANNOTATION_CAPTURE_PADDING;
+
+    return {
+      top: clampNumber(desiredTop, 0, maxTop),
+      left: clampNumber(desiredLeft, 0, maxLeft)
+    };
   }
 
   function unavailableAnnotationVisualEvidence(message: string): AnnotationVisualEvidence {
@@ -3404,6 +3464,10 @@
     return new Promise<void>((resolve) => {
       window.requestAnimationFrame(() => resolve());
     });
+  }
+
+  function clampNumber(value: number, min: number, max: number) {
+    return Math.min(Math.max(value, min), max);
   }
 
   function getCurrentAnnotationDocumentMeta(): AnnotationDocumentMeta {

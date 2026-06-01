@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.26
+
+- Fixed multi-annotation export screenshots by scrolling each annotation into view, capturing that region immediately, and then restoring the original reader scroll position.
+
 ## v0.2.25
 
 - Fixed macOS annotation screenshots when the Screen Recording preflight result is stale by attempting the in-process capture before reporting a permission error.
