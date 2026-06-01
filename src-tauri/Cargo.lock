@@ -2136,10 +2136,11 @@ dependencies = [
 
 [[package]]
 name = "mem-view"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "core-graphics",
  "image",
  "serde",
  "serde_json",

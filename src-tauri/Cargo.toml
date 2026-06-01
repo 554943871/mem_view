@@ -1,6 +1,6 @@
 [package]
 name = "mem-view"
-version = "0.2.23"
+version = "0.2.24"
 description = "A local viewer and manual Git refresher for mem repositories"
 authors = ["god"]
 edition = "2021"
@@ -29,3 +29,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 walkdir = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"

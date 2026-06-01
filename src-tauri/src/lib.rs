@@ -201,6 +201,9 @@ const ANNOTATION_EXPORT_WORK_REQUIREMENTS: &[&str] = &[
     "不要修改未被标注要求影响的内容；没有明确修改要求时不要为了回答问题而改文档。",
     "完成后说明修改了哪些文件；如果没有修改则说明无文件修改，并逐条说明每处标注的意图判断、定位依据和处理结果。",
 ];
+#[cfg(target_os = "macos")]
+const MACOS_SCREEN_CAPTURE_PERMISSION_ERROR: &str =
+    "当前运行的 memView 进程没有屏幕录制权限；如果已授权 memView.app，请重启应用后重试，开发模式还需要授权启动它的 Terminal/Codex 进程";
 
 #[tauri::command]
 fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
@@ -591,25 +594,17 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn capture_screen_region_to_png(rect: &AnnotationCaptureRect, path: &Path) -> Result<(), String> {
-    let region = screencapture_region_arg(rect)?;
-    let output = Command::new("screencapture")
-        .arg("-x")
-        .arg("-R")
-        .arg(region)
-        .arg(path)
-        .output()
-        .map_err(|err| format!("调用系统截图失败：{}", err))?;
-
-    if output.status.success() && path.exists() {
-        return Ok(());
+    if !macos_screen_capture_access_granted() {
+        return Err(MACOS_SCREEN_CAPTURE_PERMISSION_ERROR.to_string());
     }
 
-    let _ = fs::remove_file(path);
-    let detail = command_output_text(&output.stdout, &output.stderr);
-    if detail.is_empty() {
-        Err("系统截图失败，可能缺少屏幕录制权限".to_string())
-    } else {
-        Err(format!("系统截图失败：{}", detail))
+    let image = capture_screen_region_with_core_graphics(rect)?;
+    match write_cg_image_to_png(&image, path) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(path);
+            Err(err)
+        }
     }
 }
 
@@ -618,7 +613,8 @@ fn capture_screen_region_to_png(_rect: &AnnotationCaptureRect, _path: &Path) -> 
     Err("当前平台暂不支持自动截图".to_string())
 }
 
-fn screencapture_region_arg(rect: &AnnotationCaptureRect) -> Result<String, String> {
+#[cfg(target_os = "macos")]
+fn normalized_capture_rect(rect: &AnnotationCaptureRect) -> Result<(f64, f64, f64, f64), String> {
     if !rect.x.is_finite()
         || !rect.y.is_finite()
         || !rect.width.is_finite()
@@ -629,13 +625,95 @@ fn screencapture_region_arg(rect: &AnnotationCaptureRect) -> Result<String, Stri
         return Err("截图区域无效".to_string());
     }
 
-    Ok(format!(
-        "{},{},{},{}",
-        rect.x.round() as i64,
-        rect.y.round() as i64,
-        rect.width.round().max(1.0) as u64,
-        rect.height.round().max(1.0) as u64
+    Ok((
+        rect.x.round(),
+        rect.y.round(),
+        rect.width.round().max(1.0),
+        rect.height.round().max(1.0),
     ))
+}
+
+#[cfg(target_os = "macos")]
+fn capture_screen_region_with_core_graphics(
+    rect: &AnnotationCaptureRect,
+) -> Result<core_graphics::image::CGImage, String> {
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::window::{
+        create_image, kCGNullWindowID, kCGWindowImageBestResolution,
+        kCGWindowListOptionOnScreenOnly,
+    };
+
+    let (x, y, width, height) = normalized_capture_rect(rect)?;
+    let bounds = CGRect::new(&CGPoint::new(x, y), &CGSize::new(width, height));
+
+    create_image(
+        bounds,
+        kCGWindowListOptionOnScreenOnly,
+        kCGNullWindowID,
+        kCGWindowImageBestResolution,
+    )
+    .ok_or_else(|| "系统截图失败：CoreGraphics 没有返回图像，可能缺少屏幕录制权限".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn write_cg_image_to_png(image: &core_graphics::image::CGImage, path: &Path) -> Result<(), String> {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return Err("系统截图失败：返回了空图像".to_string());
+    }
+    if image.bits_per_component() != 8 || image.bits_per_pixel() != 32 {
+        return Err(format!(
+            "系统截图失败：不支持的图像格式（{} bits/component, {} bits/pixel）",
+            image.bits_per_component(),
+            image.bits_per_pixel()
+        ));
+    }
+
+    let bytes_per_row = image.bytes_per_row();
+    let expected_len = bytes_per_row
+        .checked_mul(height)
+        .ok_or_else(|| "系统截图失败：图像数据尺寸溢出".to_string())?;
+    let data = image.data();
+    let bytes = data.bytes();
+    if bytes.len() < expected_len {
+        return Err("系统截图失败：图像数据不完整".to_string());
+    }
+
+    let mut rgba = vec![0; width * height * 4];
+    for y in 0..height {
+        let source_row = y * bytes_per_row;
+        let target_row = y * width * 4;
+        for x in 0..width {
+            let source = source_row + x * 4;
+            let target = target_row + x * 4;
+            rgba[target] = bytes[source + 2];
+            rgba[target + 1] = bytes[source + 1];
+            rgba[target + 2] = bytes[source];
+            rgba[target + 3] = bytes[source + 3];
+        }
+    }
+
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+        width as u32,
+        height as u32,
+        rgba,
+    )
+    .ok_or_else(|| "系统截图失败：无法组装 PNG 图像".to_string())?;
+    buffer
+        .save_with_format(path, image::ImageFormat::Png)
+        .map_err(|err| format!("写入截图失败：{} ({})", path.display(), err))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screen_capture_access_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
 }
 
 #[cfg(target_os = "macos")]

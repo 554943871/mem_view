@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.24
+
+- Fixed annotation visual evidence capture on macOS by capturing inside the memView process instead of launching `screencapture`.
+- Added an explicit Screen Recording permission check before annotation screenshot export to avoid repeated system permission windows polluting captures.
+
 ## v0.2.23
 
 - Removed the startup system capability precheck and permission dialog.
