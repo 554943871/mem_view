@@ -1514,6 +1514,14 @@
     void loadRepo(nextPath);
   }
 
+  function refreshCurrentRepo() {
+    if (!repoPath || repoBusy) {
+      return;
+    }
+
+    void loadRepo(repoPath, { preserveCurrentDocument: true, pullBeforeScan: true });
+  }
+
   async function loadRepo(path = repoPath, options: LoadRepoOptions = {}) {
     const nextRepoPath = path.trim();
     if (!nextRepoPath) {
@@ -4521,7 +4529,7 @@
         disabled={!repoPath || repoBusy}
         aria-label={t.refresh}
         title={t.refresh}
-        on:click={() => loadRepo(repoPath, { preserveCurrentDocument: true, pullBeforeScan: true })}
+        on:click={refreshCurrentRepo}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 6v5h-5" />
@@ -4593,6 +4601,23 @@
         </div>
       </div>
       <div class="head-actions">
+        {#if !activeViewIsFile && repoPath}
+          <button
+            class="ghost icon-button reader-refresh"
+            type="button"
+            disabled={repoBusy}
+            aria-label={t.refresh}
+            title={t.refresh}
+            on:click={refreshCurrentRepo}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6v5h-5" />
+              <path d="M4 18v-5h5" />
+              <path d="M18.4 9A7 7 0 0 0 6.2 7.2L4 9.3" />
+              <path d="M5.6 15A7 7 0 0 0 17.8 16.8L20 14.7" />
+            </svg>
+          </button>
+        {/if}
         <button
           class="ghost annotation-toggle"
           class:active={annotationMode}

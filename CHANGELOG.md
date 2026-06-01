@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.27
+
+- Added a reader-header refresh button for repository documents so pull-and-refresh remains available when the left sidebar is collapsed.
+
 ## v0.2.26
 
 - Fixed multi-annotation export screenshots by scrolling each annotation into view, capturing that region immediately, and then restoring the original reader scroll position.
