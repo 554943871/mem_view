@@ -273,6 +273,12 @@
     copyingDiagram: string;
     copiedDiagram: string;
     copyDiagramFailed: string;
+    mermaidRenderFailed: string;
+    mermaidErrorBody: string;
+    mermaidErrorDetails: string;
+    copyMermaidFixPrompt: string;
+    copiedMermaidFixPrompt: string;
+    copyMermaidFixPromptFailed: string;
     copyDocumentPath: string;
     copiedDocumentPath: string;
     copyDocumentPathFailed: string;
@@ -385,6 +391,12 @@
       copyingDiagram: "复制中",
       copiedDiagram: "已复制",
       copyDiagramFailed: "复制失败",
+      mermaidRenderFailed: "Mermaid 格式错误",
+      mermaidErrorBody: "这个图暂时无法渲染。复制修复提示词后，粘贴到 Codex App 或 Claude Code 里让 AI 修复。",
+      mermaidErrorDetails: "错误信息",
+      copyMermaidFixPrompt: "复制修复提示词",
+      copiedMermaidFixPrompt: "修复提示词已复制",
+      copyMermaidFixPromptFailed: "提示词复制失败",
       copyDocumentPath: "复制完整路径",
       copiedDocumentPath: "完整路径已复制",
       copyDocumentPathFailed: "路径复制失败",
@@ -516,6 +528,12 @@
       copyingDiagram: "Copying",
       copiedDiagram: "Copied",
       copyDiagramFailed: "Copy failed",
+      mermaidRenderFailed: "Mermaid syntax error",
+      mermaidErrorBody: "This diagram cannot be rendered yet. Copy the repair prompt into Codex App or Claude Code to have AI fix it.",
+      mermaidErrorDetails: "Error details",
+      copyMermaidFixPrompt: "Copy repair prompt",
+      copiedMermaidFixPrompt: "Repair prompt copied",
+      copyMermaidFixPromptFailed: "Prompt copy failed",
       copyDocumentPath: "Copy full path",
       copiedDocumentPath: "Full path copied",
       copyDocumentPathFailed: "Path copy failed",
@@ -587,6 +605,7 @@
   const defaultTableCloseRenderer = markdown.renderer.rules.table_close;
   const defaultTableRowOpenRenderer = markdown.renderer.rules.tr_open;
   const defaultImageRenderer = markdown.renderer.rules.image;
+  const defaultTextRenderer = markdown.renderer.rules.text;
 
   markdown.renderer.rules.heading_open = (tokens, index, options, env, self) => {
     const token = tokens[index];
@@ -661,6 +680,17 @@
     return defaultImageRenderer
       ? defaultImageRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.text = (tokens, index, options, env, self) => {
+    const content = tokens[index].content;
+    if (!/<br\s*\/?>/i.test(content)) {
+      return defaultTextRenderer
+        ? defaultTextRenderer(tokens, index, options, env, self)
+        : escapeHtml(content);
+    }
+
+    return renderTextWithMarkdownBreakTags(content);
   };
 
   markdown.renderer.rules.fence = (tokens, index, options, env, self) => {
@@ -1888,14 +1918,15 @@
       ".mem-view-html-diagram-frame{position:relative;}",
       ".mem-view-html-diagram-frame>.mem-view-html-diagram-actions{position:absolute;top:8px;right:8px;z-index:2147483647;display:flex;gap:6px;opacity:.78;transition:opacity 120ms ease;}",
       ".mem-view-html-diagram-frame:hover>.mem-view-html-diagram-actions,.mem-view-html-diagram-actions:focus-within{opacity:1;}",
-      ".mem-view-html-diagram-copy,.mem-view-html-diagram-zoom{display:grid;width:30px;height:30px;place-items:center;border:1px solid rgba(160,160,152,.7);border-radius:7px;background:rgba(255,255,255,.92);color:#24313d;font:16px/1 system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}",
+      ".mem-view-html-diagram-copy,.mem-view-html-diagram-zoom{--mem-view-html-diagram-icon:none;display:grid;width:30px;height:30px;place-items:center;padding:0;border:1px solid rgba(160,160,152,.7);border-radius:7px;appearance:none;background:rgba(255,255,255,.92);color:#24313d;font:16px/1 system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}",
+      ".mem-view-html-diagram-copy{--mem-view-html-diagram-icon:url(\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M8%208h11v11H8zM5%2015H4a1%201%200%200%201-1-1V4a1%201%200%200%201%201-1h10a1%201%200%200%201%201%201v1'/%3E%3C/svg%3E\");}",
+      ".mem-view-html-diagram-zoom{--mem-view-html-diagram-icon:url(\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M15%203h6v6M9%2021H3v-6M21%203l-7%207M3%2021l7-7'/%3E%3C/svg%3E\");}",
       ".mem-view-html-diagram-copy:hover,.mem-view-html-diagram-zoom:hover{border-color:#9daaa5;background:#fff;}",
-      ".mem-view-html-diagram-copy::before{content:\"⎘\";}",
-      ".mem-view-html-diagram-zoom::before{content:\"⛶\";}",
+      ".mem-view-html-diagram-copy::before,.mem-view-html-diagram-zoom::before{content:\"\";width:16px;height:16px;background:currentColor;-webkit-mask-image:var(--mem-view-html-diagram-icon);-webkit-mask-position:center;-webkit-mask-repeat:no-repeat;-webkit-mask-size:contain;mask-image:var(--mem-view-html-diagram-icon);mask-position:center;mask-repeat:no-repeat;mask-size:contain;}",
       ".mem-view-html-diagram-copy.copied{border-color:#8fc2aa;background:#eef8f2;color:#0f6b47;}",
-      ".mem-view-html-diagram-copy.copied::before{content:\"✓\";}",
+      ".mem-view-html-diagram-copy.copied{--mem-view-html-diagram-icon:url(\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2.4'%20d='m5%2012%205%205L20%207'/%3E%3C/svg%3E\");}",
       ".mem-view-html-diagram-copy.error{border-color:#d5a3a3;background:#fff1f1;color:#9b1c1c;}",
-      ".mem-view-html-diagram-copy.error::before{content:\"!\";}"
+      ".mem-view-html-diagram-copy.error{--mem-view-html-diagram-icon:url(\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M12%208v5M12%2017h.01M21%2012a9%209%200%201%201-18%200%209%209%200%200%201%2018%200'/%3E%3C/svg%3E\");}"
     ].join("");
     const additions = `${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}<style data-mem-view>${embeddedCss}</style>${bridge}`;
     const content = document.content;
@@ -2207,15 +2238,117 @@
   }
 
   async function renderMermaid() {
-    const nodes = document.querySelectorAll<HTMLElement>(".reader .mermaid");
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(".reader .mermaid"));
     if (!nodes.length) {
       return;
     }
-    try {
-      await mermaid.run({ nodes });
-    } catch (err) {
-      console.warn("Mermaid render failed", err);
+
+    for (const node of nodes) {
+      const definition = node.textContent ?? "";
+      if (!definition.trim()) {
+        continue;
+      }
+
+      try {
+        await mermaid.parse(definition);
+        await mermaid.run({ nodes: [node] });
+        if (!node.querySelector("svg")) {
+          throw new Error("Mermaid rendered without producing an SVG");
+        }
+      } catch (err) {
+        console.warn("Mermaid render failed", err);
+        renderMermaidErrorPlaceholder(node, definition, err);
+      }
     }
+  }
+
+  function renderMermaidErrorPlaceholder(node: HTMLElement, definition: string, err: unknown) {
+    const frame = node.closest<HTMLElement>(".diagram-frame");
+    if (!frame) {
+      return;
+    }
+
+    const message = normalizeMermaidErrorMessage(err);
+    frame.classList.add("mermaid-error-frame");
+    frame.innerHTML = "";
+
+    const placeholder = frame.ownerDocument.createElement("div");
+    placeholder.className = "mermaid-error-placeholder";
+
+    const art = frame.ownerDocument.createElement("div");
+    art.className = "mermaid-error-art";
+    art.setAttribute("aria-hidden", "true");
+    art.innerHTML = "<span></span><span></span><span></span><strong>!</strong>";
+
+    const content = frame.ownerDocument.createElement("div");
+    content.className = "mermaid-error-content";
+
+    const heading = frame.ownerDocument.createElement("div");
+    heading.className = "mermaid-error-heading";
+
+    const title = frame.ownerDocument.createElement("strong");
+    title.textContent = t.mermaidRenderFailed;
+    heading.appendChild(title);
+
+    const lineRange = formatMermaidLineRange(frame);
+    if (lineRange) {
+      const line = frame.ownerDocument.createElement("span");
+      line.textContent = lineRange;
+      heading.appendChild(line);
+    }
+
+    const body = frame.ownerDocument.createElement("p");
+    body.textContent = t.mermaidErrorBody;
+
+    const detailsLabel = frame.ownerDocument.createElement("span");
+    detailsLabel.className = "mermaid-error-details-label";
+    detailsLabel.textContent = t.mermaidErrorDetails;
+
+    const details = frame.ownerDocument.createElement("div");
+    details.className = "mermaid-error-message";
+    details.textContent = message;
+
+    const source = frame.ownerDocument.createElement("code");
+    source.className = "mermaid-error-source";
+    source.hidden = true;
+    source.textContent = definition;
+
+    const actions = frame.ownerDocument.createElement("div");
+    actions.className = "mermaid-error-actions";
+
+    const promptButton = frame.ownerDocument.createElement("button");
+    promptButton.className = "mermaid-error-copy-prompt";
+    promptButton.type = "button";
+    promptButton.textContent = t.copyMermaidFixPrompt;
+    promptButton.setAttribute("aria-label", t.copyMermaidFixPrompt);
+    promptButton.title = t.copyMermaidFixPrompt;
+    actions.appendChild(promptButton);
+
+    content.appendChild(heading);
+    content.appendChild(body);
+    content.appendChild(detailsLabel);
+    content.appendChild(details);
+    content.appendChild(actions);
+    content.appendChild(source);
+    placeholder.appendChild(art);
+    placeholder.appendChild(content);
+    frame.appendChild(placeholder);
+  }
+
+  function normalizeMermaidErrorMessage(err: unknown) {
+    const message = limitExcerpt(normalizeExcerpt(getErrorMessage(err)));
+    return message || (locale === "zh-CN" ? "未知 Mermaid 错误" : "Unknown Mermaid error");
+  }
+
+  function formatMermaidLineRange(frame: HTMLElement) {
+    const start = Number(frame.dataset.sourceLineStart);
+    const end = Number(frame.dataset.sourceLineEnd);
+    if (!Number.isFinite(start) || start <= 0) {
+      return "";
+    }
+
+    const range = Number.isFinite(end) && end > start ? `${start}-${end}` : `${start}`;
+    return locale === "zh-CN" ? `第 ${range} 行` : `Line ${range}`;
   }
 
   function decodeHtml(value: string) {
@@ -2279,6 +2412,22 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function renderTextWithMarkdownBreakTags(value: string) {
+    const html: string[] = [];
+    const breakTagPattern = /<br\s*\/?>/gi;
+    let lastIndex = 0;
+
+    value.replace(breakTagPattern, (match, offset: number) => {
+      html.push(escapeHtml(value.slice(lastIndex, offset)));
+      html.push("<br>");
+      lastIndex = offset + match.length;
+      return match;
+    });
+
+    html.push(escapeHtml(value.slice(lastIndex)));
+    return html.join("");
   }
 
   function getUniqueHeadingId(content: string, env: MarkdownRenderEnv) {
@@ -2410,6 +2559,12 @@
       return;
     }
 
+    const mermaidPromptButton = target.closest<HTMLButtonElement>(".mermaid-error-copy-prompt");
+    if (mermaidPromptButton && mermaidPromptButton.closest(".reader")) {
+      await copyMermaidFixPrompt(mermaidPromptButton);
+      return;
+    }
+
     const copyButton = target.closest<HTMLButtonElement>(".diagram-copy");
     if (copyButton && copyButton.closest(".reader")) {
       const svg = getFrameDiagramSvg(copyButton);
@@ -2442,6 +2597,112 @@
   function getFrameDiagramSvg(button: HTMLButtonElement) {
     const frame = button.closest<HTMLElement>(".diagram-frame");
     return frame?.querySelector<SVGSVGElement>(".mermaid svg") ?? null;
+  }
+
+  async function copyMermaidFixPrompt(button: HTMLButtonElement) {
+    if (button.disabled) {
+      return;
+    }
+
+    const frame = button.closest<HTMLElement>(".diagram-frame");
+    const definition = frame?.querySelector<HTMLElement>(".mermaid-error-source")?.textContent ?? "";
+    const errorMessage = frame?.querySelector<HTMLElement>(".mermaid-error-message")?.textContent ?? "";
+    const prompt = buildMermaidFixPrompt(frame, definition, errorMessage);
+
+    button.disabled = true;
+    try {
+      await copyTextToClipboard(prompt);
+      setMermaidFixPromptButtonState(button, "copied");
+      showUpdateToast(t.copiedMermaidFixPrompt);
+    } catch (err) {
+      console.warn("Copy Mermaid fix prompt failed", err);
+      const message = getErrorMessage(err);
+      setMermaidFixPromptButtonState(button, "error", message);
+      showUpdateToast(`${t.copyMermaidFixPromptFailed}: ${message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function buildMermaidFixPrompt(
+    frame: HTMLElement | null | undefined,
+    definition: string,
+    errorMessage: string
+  ) {
+    const documentPath = current?.path || "";
+    const relativePath = current?.relative_path || "";
+    const lineRange = frame ? formatMermaidLineRange(frame) : "";
+    const source = definition.trimEnd();
+    const errorText = errorMessage.trim() || (locale === "zh-CN" ? "未捕获到具体错误信息" : "No detailed error was captured");
+
+    if (locale === "zh-CN") {
+      return [
+        "请修复下面 Markdown 文档中的 Mermaid 格式错误。",
+        "",
+        "如果你可以访问本地文件，请直接打开并修改该文件；如果不能访问，请返回可替换的 ```mermaid 代码块。",
+        "只修复相关 Mermaid 代码块，保持图表达的业务含义、节点文案和文档其它内容不变。",
+        "",
+        `文档路径：${documentPath || "未知"}`,
+        relativePath ? `相对路径：${relativePath}` : "",
+        lineRange ? `错误位置：${lineRange} 附近` : "",
+        "",
+        "Mermaid 报错信息：",
+        errorText,
+        "",
+        "当前 Mermaid 源码：",
+        "```mermaid",
+        source,
+        "```",
+        "",
+        "请先说明错误原因，再给出修复后的 Mermaid 代码块；如果可以直接改文件，请完成修改并说明验证方式。"
+      ].filter(Boolean).join("\n");
+    }
+
+    return [
+      "Fix the Mermaid syntax error in this Markdown document.",
+      "",
+      "If you can access the local file, open and edit it directly. If not, return a replacement ```mermaid code block.",
+      "Only fix the related Mermaid block. Preserve the diagram's meaning, node labels, and all other document content.",
+      "",
+      `Document path: ${documentPath || "Unknown"}`,
+      relativePath ? `Relative path: ${relativePath}` : "",
+      lineRange ? `Error location: near ${lineRange}` : "",
+      "",
+      "Mermaid error:",
+      errorText,
+      "",
+      "Current Mermaid source:",
+      "```mermaid",
+      source,
+      "```",
+      "",
+      "Briefly explain the cause, then provide the fixed Mermaid block. If you can edit the file directly, make the change and describe how you verified it."
+    ].filter(Boolean).join("\n");
+  }
+
+  function setMermaidFixPromptButtonState(
+    button: HTMLButtonElement,
+    state: Extract<CopyDiagramState, "copied" | "error">,
+    message = ""
+  ) {
+    button.classList.remove("copied", "error");
+    button.classList.add(state);
+    const label = state === "copied"
+      ? t.copiedMermaidFixPrompt
+      : `${t.copyMermaidFixPromptFailed}${message ? `: ${message}` : ""}`;
+    button.textContent = label;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+
+    window.setTimeout(() => {
+      if (!button.isConnected) {
+        return;
+      }
+      button.classList.remove("copied", "error");
+      button.textContent = t.copyMermaidFixPrompt;
+      button.setAttribute("aria-label", t.copyMermaidFixPrompt);
+      button.title = t.copyMermaidFixPrompt;
+    }, 1800);
   }
 
   async function handleReaderLinkClick(event: MouseEvent, link: HTMLAnchorElement) {
@@ -2920,7 +3181,7 @@
         const parent = node.parentElement;
         if (
           !parent ||
-          parent.closest(".mermaid, .diagram-actions, mark.find-highlight, script, style, noscript")
+          parent.closest(".mermaid, .diagram-actions, .mermaid-error-source, mark.find-highlight, script, style, noscript")
         ) {
           return NodeFilter.FILTER_REJECT;
         }

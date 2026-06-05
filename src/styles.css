@@ -1212,17 +1212,29 @@ h1 {
 
 .reader .diagram-copy,
 .reader .diagram-zoom {
+  --diagram-action-icon: none;
   display: grid;
   width: 30px;
   height: 30px;
   place-items: center;
+  padding: 0;
   border: 1px solid rgba(160, 160, 152, 0.7);
   border-radius: 7px;
+  appearance: none;
   background: rgba(255, 255, 255, 0.92);
   color: #24313d;
+  cursor: pointer;
   transition:
     background 120ms ease,
     border-color 120ms ease;
+}
+
+.reader .diagram-copy {
+  --diagram-action-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M8%208h11v11H8zM5%2015H4a1%201%200%200%201-1-1V4a1%201%200%200%201%201-1h10a1%201%200%200%201%201%201v1'/%3E%3C/svg%3E");
+}
+
+.reader .diagram-zoom {
+  --diagram-action-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M15%203h6v6M9%2021H3v-6M21%203l-7%207M3%2021l7-7'/%3E%3C/svg%3E");
 }
 
 .reader .diagram-frame:hover .diagram-actions,
@@ -1230,16 +1242,30 @@ h1 {
   opacity: 1;
 }
 
-.reader .diagram-copy::before {
-  content: "⎘";
-  font-size: 16px;
-  line-height: 1;
+.reader .diagram-copy::before,
+.reader .diagram-zoom::before {
+  width: 16px;
+  height: 16px;
+  content: "";
+  background: currentColor;
+  -webkit-mask-image: var(--diagram-action-icon);
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-image: var(--diagram-action-icon);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
 }
 
-.reader .diagram-zoom::before {
-  content: "⛶";
-  font-size: 17px;
-  line-height: 1;
+.reader .diagram-copy:disabled,
+.reader .diagram-zoom:disabled {
+  cursor: wait;
+}
+
+.reader .diagram-copy:disabled::before,
+.reader .diagram-zoom:disabled::before {
+  opacity: 0.7;
 }
 
 .reader .diagram-copy:hover,
@@ -1249,23 +1275,17 @@ h1 {
 }
 
 .reader .diagram-copy.copied {
+  --diagram-action-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2.4'%20d='m5%2012%205%205L20%207'/%3E%3C/svg%3E");
   border-color: #8fc2aa;
   background: #eef8f2;
   color: #0f6b47;
 }
 
-.reader .diagram-copy.copied::before {
-  content: "✓";
-}
-
 .reader .diagram-copy.error {
+  --diagram-action-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M12%208v5M12%2017h.01M21%2012a9%209%200%201%201-18%200%209%209%200%200%201%2018%200'/%3E%3C/svg%3E");
   border-color: #d5a3a3;
   background: #fff1f1;
   color: #9b1c1c;
-}
-
-.reader .diagram-copy.error::before {
-  content: "!";
 }
 
 .reader .mermaid {
@@ -1277,6 +1297,179 @@ h1 {
   background: #ffffff;
   margin: 0;
   padding: 16px;
+}
+
+.reader .mermaid-error-frame {
+  margin: 16px 0;
+}
+
+.reader .mermaid-error-placeholder {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 15px;
+  align-items: start;
+  border: 1px dashed #d6a7a0;
+  border-radius: 7px;
+  background: #fff8f6;
+  color: #3f2c29;
+  padding: 16px;
+}
+
+.reader .mermaid-error-art {
+  position: relative;
+  width: 92px;
+  height: 72px;
+  border: 1px solid #e3c5bf;
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #fff4f1 100%);
+}
+
+.reader .mermaid-error-art span,
+.reader .mermaid-error-art strong {
+  position: absolute;
+  display: block;
+}
+
+.reader .mermaid-error-art span {
+  width: 22px;
+  height: 12px;
+  border: 1px solid #b7c3bf;
+  border-radius: 4px;
+  background: #f7fbf9;
+}
+
+.reader .mermaid-error-art span:nth-child(1) {
+  top: 13px;
+  left: 12px;
+}
+
+.reader .mermaid-error-art span:nth-child(2) {
+  top: 13px;
+  right: 12px;
+}
+
+.reader .mermaid-error-art span:nth-child(3) {
+  bottom: 14px;
+  left: 35px;
+}
+
+.reader .mermaid-error-art::before,
+.reader .mermaid-error-art::after {
+  position: absolute;
+  content: "";
+  border-top: 1px solid #b7c3bf;
+  transform-origin: left center;
+}
+
+.reader .mermaid-error-art::before {
+  top: 29px;
+  left: 27px;
+  width: 33px;
+  transform: rotate(28deg);
+}
+
+.reader .mermaid-error-art::after {
+  top: 29px;
+  right: 26px;
+  width: 32px;
+  transform: rotate(152deg);
+}
+
+.reader .mermaid-error-art strong {
+  right: -7px;
+  bottom: -7px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid #c56557;
+  border-radius: 999px;
+  background: #fff1ed;
+  color: #9b3327;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.reader .mermaid-error-content {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.reader .mermaid-error-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader .mermaid-error-heading strong {
+  color: #8d2f25;
+  font-size: 15px;
+}
+
+.reader .mermaid-error-heading span {
+  color: #7c534d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reader .mermaid-error-content p {
+  color: #5d413c;
+}
+
+.reader .mermaid-error-details-label {
+  color: #7c534d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reader .mermaid-error-message {
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid #ead3ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #5d413c;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.reader .mermaid-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader .mermaid-error-copy-prompt {
+  min-height: 32px;
+  border: 1px solid #9f6b62;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #7f2c22;
+  font-weight: 700;
+  padding: 0 11px;
+}
+
+.reader .mermaid-error-copy-prompt:hover {
+  border-color: #8d2f25;
+  background: #fff1ed;
+}
+
+.reader .mermaid-error-copy-prompt.copied {
+  border-color: #7cae95;
+  background: #eff8f3;
+  color: #0f6b47;
+}
+
+.reader .mermaid-error-copy-prompt.error {
+  border-color: #d5a3a3;
+  background: #fff1f1;
+  color: #9b1c1c;
 }
 
 .update-toast {

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.28
+
+- Added a Mermaid syntax-error placeholder with captured error details and a copyable repair prompt for invalid diagrams.
+- Fixed Markdown table cells so `<br>` break tags render as line breaks while other inline HTML remains escaped.
+- Replaced diagram action glyphs with mask-based icons for more consistent rendering.
+
 ## v0.2.27
 
 - Added a reader-header refresh button for repository documents so pull-and-refresh remains available when the left sidebar is collapsed.
