@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.29
+
+- Fixed Mermaid diagrams so repeated render passes keep using the original diagram source instead of parsing generated SVG styles.
+
 ## v0.2.28
 
 - Added a Mermaid syntax-error placeholder with captured error details and a copyable repair prompt for invalid diagrams.

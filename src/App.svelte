@@ -705,6 +705,7 @@
             <button class="diagram-zoom" type="button" aria-label="${escapeHtml(t.enlargeDiagram)}" title="${escapeHtml(t.enlargeDiagram)}"></button>
           </div>
           <div class="mermaid">${escapeHtml(token.content)}</div>
+          <code class="mermaid-source" hidden>${escapeHtml(token.content)}</code>
         </figure>
       `;
     }
@@ -2244,22 +2245,35 @@
     }
 
     for (const node of nodes) {
-      const definition = node.textContent ?? "";
+      if (node.dataset.mermaidRendered === "true" && node.querySelector("svg")) {
+        continue;
+      }
+
+      const definition = getMermaidSource(node);
       if (!definition.trim()) {
         continue;
       }
 
       try {
+        node.textContent = definition;
         await mermaid.parse(definition);
         await mermaid.run({ nodes: [node] });
         if (!node.querySelector("svg")) {
           throw new Error("Mermaid rendered without producing an SVG");
         }
+        node.dataset.mermaidRendered = "true";
       } catch (err) {
         console.warn("Mermaid render failed", err);
         renderMermaidErrorPlaceholder(node, definition, err);
       }
     }
+  }
+
+  function getMermaidSource(node: HTMLElement) {
+    return node
+      .closest<HTMLElement>(".diagram-frame")
+      ?.querySelector<HTMLElement>(".mermaid-source")
+      ?.textContent ?? node.textContent ?? "";
   }
 
   function renderMermaidErrorPlaceholder(node: HTMLElement, definition: string, err: unknown) {
