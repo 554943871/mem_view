@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.31
+
+- Fixed local Markdown image refresh so updated SVG wireframes and other local image assets reload immediately after Pull & Refresh instead of requiring an app restart.
+
 ## v0.2.30
 
 - Fixed Mermaid diagram image copying for diagrams that render HTML labels, avoiding failed SVG image loads and tainted canvas exports.

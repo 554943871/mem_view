@@ -756,6 +756,7 @@
   let current: Document | null = null;
   let repoCurrent: Document | null = null;
   let renderedHtml = "";
+  let localAssetCacheVersion = Date.now();
   let activeRendererId: DocumentContentType | "" = "";
   let htmlFrameSrcdoc = "";
   let htmlFrameElement: HTMLIFrameElement | null = null;
@@ -1839,7 +1840,12 @@
   }
 
   function renderDocumentContent(document: Document) {
+    bumpLocalAssetCacheVersion();
     getDocumentRenderer(document).render(document);
+  }
+
+  function bumpLocalAssetCacheVersion() {
+    localAssetCacheVersion = Math.max(localAssetCacheVersion + 1, Date.now());
   }
 
   function renderMarkdownDocument(document: Document) {
@@ -2897,10 +2903,22 @@
     }
 
     try {
-      return `${convertFileSrc(resolved.path)}${resolved.suffix}`;
+      return appendLocalAssetCacheBuster(convertFileSrc(resolved.path), resolved.suffix);
     } catch {
       return null;
     }
+  }
+
+  function appendLocalAssetCacheBuster(assetUrl: string, suffix: string) {
+    const hashIndex = suffix.indexOf("#");
+    const suffixBeforeHash = hashIndex === -1 ? suffix : suffix.slice(0, hashIndex);
+    const hash = hashIndex === -1 ? "" : suffix.slice(hashIndex);
+    const hasQuery = assetUrl.includes("?") || suffixBeforeHash.includes("?");
+    const separator = hasQuery
+      ? suffixBeforeHash.endsWith("?") || suffixBeforeHash.endsWith("&") ? "" : "&"
+      : "?";
+
+    return `${assetUrl}${suffixBeforeHash}${separator}mem_view_asset_v=${encodeURIComponent(String(localAssetCacheVersion))}${hash}`;
   }
 
   function isExternalImageSrc(src: string) {
