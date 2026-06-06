@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.30
+
+- Fixed Mermaid diagram image copying for diagrams that render HTML labels, avoiding failed SVG image loads and tainted canvas exports.
+- Made the native image clipboard path prefer direct PNG decoding and system image writes before falling back to the macOS AppleScript path.
+
 ## v0.2.29
 
 - Fixed Mermaid diagrams so repeated render passes keep using the original diagram source instead of parsing generated SVG styles.

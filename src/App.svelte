@@ -4169,11 +4169,15 @@
   function loadSerializedSvgImage(svgMarkup: string) {
     return new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
-      const url = `data:image/svg+xml;base64,${bytesToBase64(new TextEncoder().encode(svgMarkup))}`;
+      const blob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const revokeUrl = () => URL.revokeObjectURL(url);
       image.onload = () => {
+        revokeUrl();
         resolve(image);
       };
       image.onerror = () => {
+        revokeUrl();
         reject(new Error("Failed to load diagram image"));
       };
       image.src = url;
@@ -4348,6 +4352,8 @@
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
     inlineSvgComputedStyles(svg, clone);
+    replaceSvgForeignObjectsWithText(clone);
+    clone.querySelectorAll("style").forEach((style) => style.remove());
     const bounds = getSvgContentBox(svg);
     if (bounds) {
       clone.setAttribute(
@@ -4366,7 +4372,7 @@
     clone.style.display = "block";
     clone.style.maxWidth = "none";
     clone.style.background = "#ffffff";
-    return clone.outerHTML;
+    return new XMLSerializer().serializeToString(clone);
   }
 
   function inlineSvgComputedStyles(source: SVGElement, clone: SVGElement) {
@@ -4409,12 +4415,89 @@
       const computed = sourceElement.ownerDocument.defaultView?.getComputedStyle(sourceElement) ??
         getComputedStyle(sourceElement);
       for (const property of properties) {
-        const value = computed.getPropertyValue(property);
+        const value = normalizeSvgStyleValue(computed.getPropertyValue(property));
         if (value) {
           cloneElement.style.setProperty(property, value);
         }
       }
     }
+  }
+
+  function normalizeSvgStyleValue(value: string) {
+    return value.replace(/url\((['"]?)[^'")#]*#([^'")]+)\1\)/g, "url(#$2)");
+  }
+
+  function replaceSvgForeignObjectsWithText(svg: SVGSVGElement) {
+    svg.querySelectorAll<SVGForeignObjectElement>("foreignObject").forEach((foreignObject) => {
+      const lines = getForeignObjectTextLines(foreignObject);
+      if (!lines.length) {
+        return;
+      }
+
+      const width = parseFloat(foreignObject.getAttribute("width") ?? "") || 0;
+      const height = parseFloat(foreignObject.getAttribute("height") ?? "") || 0;
+      const labelElement = foreignObject.querySelector<HTMLElement>(".nodeLabel, p, div, span");
+      const fontSize = parseFloat(labelElement?.style.getPropertyValue("font-size") ?? "") || 16;
+      const lineHeight = Math.max(fontSize * 1.35, fontSize + 4);
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", String(width / 2));
+      text.setAttribute("y", String(height / 2 - ((lines.length - 1) * lineHeight) / 2));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("dominant-baseline", "middle");
+      text.setAttribute("font-family", labelElement?.style.getPropertyValue("font-family") || "sans-serif");
+      text.setAttribute("font-size", String(fontSize));
+      text.setAttribute("font-weight", labelElement?.style.getPropertyValue("font-weight") || "400");
+      text.setAttribute("fill", labelElement?.style.getPropertyValue("color") || "#000000");
+
+      lines.forEach((line, index) => {
+        const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        tspan.setAttribute("x", String(width / 2));
+        tspan.setAttribute("dy", index === 0 ? "0" : String(lineHeight));
+        tspan.textContent = line;
+        text.appendChild(tspan);
+      });
+
+      foreignObject.replaceWith(text);
+    });
+  }
+
+  function getForeignObjectTextLines(foreignObject: SVGForeignObjectElement) {
+    const lines: string[] = [];
+    let currentLine = "";
+    const flushLine = () => {
+      const line = currentLine.replace(/\s+/g, " ").trim();
+      if (line) {
+        lines.push(line);
+      }
+      currentLine = "";
+    };
+    const visit = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        currentLine += node.textContent ?? "";
+        return;
+      }
+      if (!(node instanceof Element)) {
+        return;
+      }
+
+      const tagName = node.tagName.toLowerCase();
+      const isBlock = ["div", "p", "li", "section", "article"].includes(tagName);
+      if (tagName === "br") {
+        flushLine();
+        return;
+      }
+      if (isBlock && currentLine.trim()) {
+        flushLine();
+      }
+      node.childNodes.forEach((child) => visit(child));
+      if (isBlock) {
+        flushLine();
+      }
+    };
+
+    foreignObject.childNodes.forEach((child) => visit(child));
+    flushLine();
+    return lines;
   }
 
   function addSvgWhiteBackground(svg: SVGSVGElement, size: SvgBox | { width: number; height: number }) {

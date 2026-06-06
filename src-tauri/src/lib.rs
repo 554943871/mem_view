@@ -294,13 +294,10 @@ fn copy_image_to_clipboard(image: ClipboardImage) -> Result<(), String> {
         .decode(image.png_base64.trim())
         .map_err(|err| format!("图片数据解析失败：{}", err))?;
 
-    #[cfg(target_os = "macos")]
-    if let Err(err) = copy_png_to_macos_clipboard(&bytes) {
-        eprintln!("macOS clipboard fallback failed: {}", err);
-    } else {
-        return Ok(());
-    }
+    copy_png_bytes_to_clipboard(&bytes)
+}
 
+fn copy_png_bytes_to_clipboard(bytes: &[u8]) -> Result<(), String> {
     let decoded = image::load_from_memory(&bytes)
         .map_err(|err| format!("图片解码失败：{}", err))?
         .to_rgba8();
@@ -310,13 +307,31 @@ fn copy_image_to_clipboard(image: ClipboardImage) -> Result<(), String> {
         return Err("图片尺寸无效".to_string());
     }
 
-    let mut clipboard =
-        Clipboard::new().map_err(|err| format!("打开系统剪贴板失败：{}", err))?;
+    match copy_rgba_image_to_clipboard(width, height, decoded.into_raw()) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            #[cfg(target_os = "macos")]
+            {
+                eprintln!("Native image clipboard path failed: {}", err);
+                copy_png_to_macos_clipboard(bytes)
+                    .map_err(|fallback_err| format!("{}；macOS 兜底失败：{}", err, fallback_err))
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn copy_rgba_image_to_clipboard(width: usize, height: usize, bytes: Vec<u8>) -> Result<(), String> {
+    let mut clipboard = Clipboard::new().map_err(|err| format!("打开系统剪贴板失败：{}", err))?;
     clipboard
         .set_image(ImageData {
             width,
             height,
-            bytes: Cow::Owned(decoded.into_raw()),
+            bytes: Cow::Owned(bytes),
         })
         .map_err(|err| format!("写入系统剪贴板失败：{}", err))
 }
@@ -330,7 +345,7 @@ fn copy_svg_to_clipboard(image: ClipboardSvg) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let png = render_svg_to_png_with_sips(&image.svg)?;
-        return copy_png_to_macos_clipboard(&png);
+        return copy_png_bytes_to_clipboard(&png);
     }
 
     #[cfg(not(target_os = "macos"))]
