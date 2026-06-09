@@ -2614,6 +2614,54 @@
     fitDiagramToViewport();
   }
 
+  function handleReaderWheel(event: WheelEvent) {
+    if (!readerElement || event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const tableScroller = target.closest<HTMLElement>(".table-scroll");
+    if (!tableScroller || !readerElement.contains(tableScroller)) {
+      return;
+    }
+
+    const deltaY = wheelDeltaToPixels(event.deltaY, event.deltaMode, readerElement.clientHeight);
+    const deltaX = wheelDeltaToPixels(event.deltaX, event.deltaMode, readerElement.clientWidth);
+    if (Math.abs(deltaY) <= Math.abs(deltaX)) {
+      return;
+    }
+
+    const maxReaderTop = Math.max(0, readerElement.scrollHeight - readerElement.clientHeight);
+    const nextReaderTop = clampNumber(readerElement.scrollTop + deltaY, 0, maxReaderTop);
+    if (nextReaderTop === readerElement.scrollTop) {
+      return;
+    }
+
+    if (deltaX !== 0) {
+      const maxTableLeft = Math.max(0, tableScroller.scrollWidth - tableScroller.clientWidth);
+      tableScroller.scrollLeft = clampNumber(tableScroller.scrollLeft + deltaX, 0, maxTableLeft);
+    }
+
+    readerElement.scrollTop = nextReaderTop;
+    event.preventDefault();
+  }
+
+  function wheelDeltaToPixels(delta: number, deltaMode: number, pageSize: number) {
+    if (deltaMode === WheelEvent.DOM_DELTA_LINE) {
+      return delta * 16;
+    }
+
+    if (deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+      return delta * pageSize;
+    }
+
+    return delta;
+  }
+
   function getFrameDiagramSvg(button: HTMLButtonElement) {
     const frame = button.closest<HTMLElement>(".diagram-frame");
     return frame?.querySelector<SVGSVGElement>(".mermaid svg") ?? null;
@@ -5124,6 +5172,7 @@
           class:capturing={annotationCaptureHidden}
           class:html-document={activeRendererId === "html"}
           bind:this={readerElement}
+          on:wheel|nonpassive={handleReaderWheel}
           on:pointerdown={handleReaderPointerDown}
           on:pointermove={handleReaderPointerMove}
           on:pointerup={handleReaderPointerUp}

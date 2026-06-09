@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.32
+
+- Fixed Markdown table mouse-wheel handling so vertical scrolling continues to move the reader while the pointer is over a horizontally scrollable table.
+
 ## v0.2.31
 
 - Fixed local Markdown image refresh so updated SVG wireframes and other local image assets reload immediately after Pull & Refresh instead of requiring an app restart.
