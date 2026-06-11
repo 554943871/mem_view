@@ -784,6 +784,36 @@ h1 {
   color: #1f4f46;
 }
 
+.annotation-archives-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+}
+
+.annotation-archives-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.annotation-archives-button strong {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: #eef3ef;
+  color: #1f4f46;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 5px;
+}
+
 .find-bar {
   display: flex;
   align-items: center;
@@ -1591,6 +1621,127 @@ h1 {
 
 .update-toast.error .update-toast-icon::before {
   content: none;
+}
+
+.annotation-archives-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(720px, calc(100vw - 56px));
+  max-height: min(680px, calc(100vh - 56px));
+  overflow: hidden;
+  border: 1px solid #d9d9d2;
+  border-radius: 8px;
+  background: #fbfbf9;
+  box-shadow: 0 24px 80px rgba(31, 41, 51, 0.24);
+}
+
+.annotation-archives-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #e1e1dc;
+  padding: 20px 22px 16px;
+}
+
+.annotation-archives-head h2 {
+  margin: 4px 0 5px;
+  color: #1f2933;
+  font-size: 22px;
+  line-height: 1.18;
+}
+
+.annotation-archives-head p {
+  margin: 0;
+  max-width: 560px;
+  overflow: hidden;
+  color: #66737f;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-archive-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.annotation-archive-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid #e0e2dc;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.annotation-archive-main {
+  min-width: 0;
+}
+
+.annotation-archive-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.annotation-archive-title strong {
+  color: #1f2933;
+  font-size: 14px;
+}
+
+.annotation-archive-title span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e9f3ee;
+  color: #1f4f46;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 6px;
+}
+
+.annotation-archive-item p {
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: #65717c;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-archive-item small {
+  display: inline-flex;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: #fff3cd;
+  color: #6a4a13;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.annotation-archive-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.annotation-archives-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: #74808b;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 28px;
 }
 
 .update-modal {

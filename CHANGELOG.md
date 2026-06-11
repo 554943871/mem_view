@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.34
+
+- Changed annotation completion to archive the current annotation bundle in app data, with restore and prompt-copy actions available from the reader header.
+- Added a reload action for standalone document views so a single opened file can be refreshed from disk without reopening it.
+
 ## v0.2.33
 
 - Fixed Markdown table mouse-wheel handling so vertical scrolling continues to move the reader while the pointer is over a horizontally scrollable table.

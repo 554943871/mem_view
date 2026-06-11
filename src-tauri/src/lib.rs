@@ -118,8 +118,19 @@ struct AnnotationItem {
     id: String,
     note: String,
     rect: AnnotationRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note_position: Option<AnnotationNotePosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note_collapsed: Option<bool>,
     covered_nodes: Vec<AnnotationCoveredNode>,
     visual_evidence: Option<AnnotationVisualEvidence>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationNotePosition {
+    left: f64,
+    top: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -184,13 +195,42 @@ enum AnnotationCaptureStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AnnotationExportResult {
+    archive_id: String,
     annotation_directory_path: String,
     readme_path: String,
+    prompt: String,
+    annotation_count: usize,
+    screenshot_unavailable_count: usize,
+    prompt_copied: bool,
+    prompt_copy_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationArchiveSummary {
+    archive_id: String,
+    created_at_unix_ms: u64,
+    annotation_directory_path: String,
+    readme_path: String,
+    document_path: String,
+    document_title: String,
+    document_relative_path: String,
+    repo_path: Option<String>,
+    annotation_count: usize,
+    screenshot_unavailable_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationArchiveRecord {
+    summary: AnnotationArchiveSummary,
+    payload: AnnotationExportPayload,
     prompt: String,
 }
 
 #[allow(dead_code)]
 struct AnnotationBundlePaths {
+    archive_id: String,
     directory_path: PathBuf,
     annotations_path: PathBuf,
     readme_path: PathBuf,
@@ -374,18 +414,52 @@ fn copy_svg_to_clipboard(image: ClipboardSvg) -> Result<(), String> {
 
 #[tauri::command]
 fn finish_annotation_export(
+    app: tauri::AppHandle,
     payload: AnnotationExportPayload,
 ) -> Result<AnnotationExportResult, String> {
-    let bundle_paths = write_annotation_export(payload)?;
+    let archive_root = annotation_archive_root(&app)?;
+    let bundle_paths = write_annotation_export(payload, &archive_root)?;
     let readme_path_string = bundle_paths.readme_path.to_string_lossy().to_string();
+    let archived_payload = read_annotation_payload_from_path(&bundle_paths.annotations_path)?;
+    let stats = annotation_export_stats(&archived_payload);
     let prompt = build_annotation_prompt(&readme_path_string);
-    copy_text_to_clipboard(&prompt)?;
+    let prompt_copy_error = copy_text_to_clipboard(&prompt).err();
 
     Ok(AnnotationExportResult {
+        archive_id: bundle_paths.archive_id,
         annotation_directory_path: bundle_paths.directory_path.to_string_lossy().to_string(),
         readme_path: readme_path_string,
         prompt,
+        annotation_count: stats.annotation_count,
+        screenshot_unavailable_count: stats.screenshot_unavailable_count,
+        prompt_copied: prompt_copy_error.is_none(),
+        prompt_copy_error,
     })
+}
+
+#[tauri::command]
+fn list_annotation_archives(
+    app: tauri::AppHandle,
+) -> Result<Vec<AnnotationArchiveSummary>, String> {
+    list_annotation_archives_from_root(&annotation_archive_root(&app)?)
+}
+
+#[tauri::command]
+fn read_annotation_archive(
+    app: tauri::AppHandle,
+    archive_id: String,
+) -> Result<AnnotationArchiveRecord, String> {
+    read_annotation_archive_from_root(&annotation_archive_root(&app)?, &archive_id)
+}
+
+#[tauri::command]
+fn copy_annotation_archive_prompt(
+    app: tauri::AppHandle,
+    archive_id: String,
+) -> Result<String, String> {
+    let record = read_annotation_archive_from_root(&annotation_archive_root(&app)?, &archive_id)?;
+    copy_text_to_clipboard(&record.prompt)?;
+    Ok(record.prompt)
 }
 
 #[tauri::command]
@@ -397,12 +471,18 @@ fn capture_annotation_screenshot(capture_rect: AnnotationCaptureRect) -> Result<
 
 fn write_annotation_export(
     mut payload: AnnotationExportPayload,
+    archive_root: &Path,
 ) -> Result<AnnotationBundlePaths, String> {
     validate_annotation_export(&payload)?;
-    let directory_path = annotation_temp_dir_path(&std::env::temp_dir(), unix_timestamp_millis());
+    let directory_path = annotation_archive_dir_path(archive_root, unix_timestamp_millis());
+    let archive_id = directory_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法生成标注归档 ID".to_string())?
+        .to_string();
     let images_path = directory_path.join("images");
     fs::create_dir_all(&images_path)
-        .map_err(|err| format!("创建标注临时目录失败：{} ({})", images_path.display(), err))?;
+        .map_err(|err| format!("创建标注归档目录失败：{} ({})", images_path.display(), err))?;
 
     finalize_annotation_visual_evidence(&mut payload, &images_path);
 
@@ -415,10 +495,142 @@ fn write_annotation_export(
         .map_err(|err| format!("写入标注说明文件失败：{} ({})", readme_path.display(), err))?;
 
     Ok(AnnotationBundlePaths {
+        archive_id,
         directory_path,
         annotations_path,
         readme_path,
     })
+}
+
+fn annotation_archive_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("annotation-archives"))
+        .map_err(|err| format!("获取标注归档目录失败：{}", err))
+}
+
+fn list_annotation_archives_from_root(root: &Path) -> Result<Vec<AnnotationArchiveSummary>, String> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(root)
+        .map_err(|err| format!("读取标注归档目录失败：{} ({})", root.display(), err))?;
+    let mut summaries = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("读取标注归档项失败：{}", err))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Ok(summary) = annotation_archive_summary_from_dir(&path) {
+            summaries.push(summary);
+        }
+    }
+    summaries.sort_by(|a, b| b.created_at_unix_ms.cmp(&a.created_at_unix_ms));
+    Ok(summaries)
+}
+
+fn read_annotation_archive_from_root(
+    root: &Path,
+    archive_id: &str,
+) -> Result<AnnotationArchiveRecord, String> {
+    validate_annotation_archive_id(archive_id)?;
+    let directory_path = root.join(archive_id);
+    if !directory_path.is_dir() {
+        return Err(format!("标注归档不存在：{}", archive_id));
+    }
+    let payload = read_annotation_payload_from_path(&directory_path.join("annotations.json"))?;
+    let summary = annotation_archive_summary_from_payload(&directory_path, &payload)?;
+    let prompt = build_annotation_prompt(&summary.readme_path);
+
+    Ok(AnnotationArchiveRecord {
+        summary,
+        payload,
+        prompt,
+    })
+}
+
+fn annotation_archive_summary_from_dir(
+    directory_path: &Path,
+) -> Result<AnnotationArchiveSummary, String> {
+    let payload = read_annotation_payload_from_path(&directory_path.join("annotations.json"))?;
+    annotation_archive_summary_from_payload(directory_path, &payload)
+}
+
+fn annotation_archive_summary_from_payload(
+    directory_path: &Path,
+    payload: &AnnotationExportPayload,
+) -> Result<AnnotationArchiveSummary, String> {
+    let archive_id = directory_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("标注归档目录无效：{}", directory_path.display()))?
+        .to_string();
+    let document = payload
+        .documents
+        .first()
+        .ok_or_else(|| "标注归档没有文档".to_string())?;
+    let stats = annotation_export_stats(&payload);
+
+    Ok(AnnotationArchiveSummary {
+        archive_id,
+        created_at_unix_ms: payload.created_at_unix_ms,
+        annotation_directory_path: directory_path.to_string_lossy().to_string(),
+        readme_path: directory_path.join("README.md").to_string_lossy().to_string(),
+        document_path: document.path.clone(),
+        document_title: document.title.clone(),
+        document_relative_path: document.relative_path.clone(),
+        repo_path: document.repo_path.clone(),
+        annotation_count: stats.annotation_count,
+        screenshot_unavailable_count: stats.screenshot_unavailable_count,
+    })
+}
+
+fn read_annotation_payload_from_path(path: &Path) -> Result<AnnotationExportPayload, String> {
+    let json = fs::read_to_string(path)
+        .map_err(|err| format!("读取标注归档 JSON 失败：{} ({})", path.display(), err))?;
+    serde_json::from_str(&json)
+        .map_err(|err| format!("解析标注归档 JSON 失败：{} ({})", path.display(), err))
+}
+
+struct AnnotationExportStats {
+    annotation_count: usize,
+    screenshot_unavailable_count: usize,
+}
+
+fn annotation_export_stats(payload: &AnnotationExportPayload) -> AnnotationExportStats {
+    let mut annotation_count = 0usize;
+    let mut screenshot_unavailable_count = 0usize;
+    for annotation in payload
+        .documents
+        .iter()
+        .flat_map(|document| document.annotations.iter())
+    {
+        annotation_count += 1;
+        if !matches!(
+            annotation.visual_evidence.as_ref().map(|evidence| &evidence.capture_status),
+            Some(AnnotationCaptureStatus::Captured)
+        ) {
+            screenshot_unavailable_count += 1;
+        }
+    }
+
+    AnnotationExportStats {
+        annotation_count,
+        screenshot_unavailable_count,
+    }
+}
+
+fn validate_annotation_archive_id(archive_id: &str) -> Result<(), String> {
+    if archive_id.is_empty()
+        || archive_id
+            .chars()
+            .any(|ch| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+    {
+        return Err("标注归档 ID 无效".to_string());
+    }
+    Ok(())
 }
 
 fn write_annotation_export_to_path(
@@ -670,7 +882,7 @@ fn validate_annotation_export(payload: &AnnotationExportPayload) -> Result<(), S
     Ok(())
 }
 
-fn annotation_temp_dir_path(base: &Path, timestamp_millis: u128) -> PathBuf {
+fn annotation_archive_dir_path(base: &Path, timestamp_millis: u128) -> PathBuf {
     base.join(format!(
         "mem-view-annotations-{}-{}",
         std::process::id(),
@@ -1427,6 +1639,9 @@ pub fn run() {
             read_standalone_document,
             read_markdown_file,
             finish_annotation_export,
+            list_annotation_archives,
+            read_annotation_archive,
+            copy_annotation_archive_prompt,
             capture_annotation_screenshot,
             copy_svg_to_clipboard,
             copy_image_to_clipboard,
@@ -1677,13 +1892,13 @@ mod tests {
     }
 
     #[test]
-    fn builds_annotation_temp_dir_path_with_expected_name() {
+    fn builds_annotation_archive_dir_path_with_expected_name() {
         let base = PathBuf::from("/tmp");
-        let path = annotation_temp_dir_path(&base, 12345);
+        let path = annotation_archive_dir_path(&base, 12345);
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .expect("temp path should have file name");
+            .expect("archive path should have file name");
 
         assert_eq!(path.parent(), Some(base.as_path()));
         assert!(file_name.starts_with("mem-view-annotations-"));
@@ -1693,14 +1908,16 @@ mod tests {
     #[test]
     fn writes_annotation_bundle_with_readme_json_and_visual_evidence() {
         let payload = build_annotation_payload();
+        let archive_root = build_temp_dir("annotation-archive");
 
-        let bundle = write_annotation_export(payload).expect("annotation bundle should write");
+        let bundle = write_annotation_export(payload, &archive_root).expect("annotation bundle should write");
         let prompt = build_annotation_prompt(&bundle.readme_path.to_string_lossy());
         let readme = fs::read_to_string(&bundle.readme_path).expect("README should be readable");
         let json = fs::read_to_string(&bundle.annotations_path)
             .expect("annotation JSON should be readable");
 
-        assert!(bundle.directory_path.starts_with(std::env::temp_dir()));
+        assert!(bundle.directory_path.starts_with(&archive_root));
+        assert!(bundle.archive_id.starts_with("mem-view-annotations-"));
         assert_eq!(
             bundle
                 .annotations_path
@@ -1731,8 +1948,29 @@ mod tests {
     }
 
     #[test]
+    fn lists_and_reads_annotation_archives_from_root() {
+        let payload = build_annotation_payload();
+        let archive_root = build_temp_dir("annotation-archive-list");
+
+        let bundle = write_annotation_export(payload, &archive_root).expect("annotation bundle should write");
+        let summaries =
+            list_annotation_archives_from_root(&archive_root).expect("annotation archives should list");
+        let record = read_annotation_archive_from_root(&archive_root, &bundle.archive_id)
+            .expect("annotation archive should read");
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].archive_id, bundle.archive_id);
+        assert_eq!(summaries[0].annotation_count, 1);
+        assert_eq!(summaries[0].screenshot_unavailable_count, 1);
+        assert_eq!(record.summary.archive_id, summaries[0].archive_id);
+        assert_eq!(record.payload.documents[0].annotations[0].note, "需要补充边界条件");
+        assert!(record.prompt.contains(&record.summary.readme_path));
+    }
+
+    #[test]
     fn writes_annotation_bundle_with_supplied_screenshot_file() {
         let root = build_temp_dir("annotation-screenshot");
+        let archive_root = build_temp_dir("annotation-screenshot-archive");
         fs::create_dir_all(&root).expect("screenshot temp dir should create");
         let source_path = root.join("source.png");
         fs::write(&source_path, b"png").expect("source screenshot should write");
@@ -1746,7 +1984,7 @@ mod tests {
         evidence.capture_status = AnnotationCaptureStatus::Captured;
         evidence.capture_error = None;
 
-        let bundle = write_annotation_export(payload).expect("annotation bundle should write");
+        let bundle = write_annotation_export(payload, &archive_root).expect("annotation bundle should write");
         let bundled_screenshot = bundle.directory_path.join("images").join("ann-1.png");
         let json = fs::read_to_string(&bundle.annotations_path)
             .expect("annotation JSON should be readable");
@@ -1794,6 +2032,11 @@ mod tests {
                         reader_width: 800.0,
                         reader_height: 600.0,
                     },
+                    note_position: Some(AnnotationNotePosition {
+                        left: 160.0,
+                        top: 20.0,
+                    }),
+                    note_collapsed: Some(false),
                     covered_nodes: vec![AnnotationCoveredNode {
                         node_id: "paragraph-1-2".to_string(),
                         node_type: "paragraph".to_string(),

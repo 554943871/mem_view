@@ -170,14 +170,38 @@
         id: string;
         note: string;
         rect: AnnotationRect;
+        notePosition?: AnnotationNotePosition | null;
+        noteCollapsed?: boolean | null;
         coveredNodes: AnnotationCoveredNode[];
         visualEvidence: AnnotationVisualEvidence;
       }>;
     }>;
   };
   type AnnotationExportResult = {
+    archiveId: string;
     annotationDirectoryPath: string;
     readmePath: string;
+    prompt: string;
+    annotationCount: number;
+    screenshotUnavailableCount: number;
+    promptCopied: boolean;
+    promptCopyError: string | null;
+  };
+  type AnnotationArchiveSummary = {
+    archiveId: string;
+    createdAtUnixMs: number;
+    annotationDirectoryPath: string;
+    readmePath: string;
+    documentPath: string;
+    documentTitle: string;
+    documentRelativePath: string;
+    repoPath: string | null;
+    annotationCount: number;
+    screenshotUnavailableCount: number;
+  };
+  type AnnotationArchiveRecord = {
+    summary: AnnotationArchiveSummary;
+    payload: AnnotationExportPayload;
     prompt: string;
   };
   type OpenView = {
@@ -192,6 +216,7 @@
   };
   type OpenDocumentOptions = {
     restoreScrollTop?: number;
+    forceReload?: boolean;
   };
   type RepoViewState = {
     currentRelativePath: string;
@@ -224,6 +249,7 @@
     noRecentRepos: string;
     chooseNewRepo: string;
     openDocumentFile: string;
+    reloadDocumentFile: string;
     lastUpdated: string;
     checkUpdate: string;
     updateNow: string;
@@ -314,7 +340,20 @@
     annotationNoAnnotations: string;
     annotationExporting: string;
     annotationExported: string;
+    annotationArchivedCopyFailed: string;
+    annotationArchivedWithMissingScreenshots: string;
     annotationExportFailed: string;
+    annotationArchives: string;
+    annotationArchivesEmpty: string;
+    annotationArchivesLoading: string;
+    annotationArchiveRestore: string;
+    annotationArchiveRestored: string;
+    annotationArchiveCopyPrompt: string;
+    annotationArchivePromptCopied: string;
+    annotationArchiveLoadFailed: string;
+    annotationArchiveRestoreFailed: string;
+    annotationArchiveCopyFailed: string;
+    annotationArchiveMissingScreenshots: string;
     pullFailed: string;
     editAnnotation: string;
     moveAnnotationNote: string;
@@ -345,6 +384,7 @@
       noRecentRepos: "暂无最近打开",
       chooseNewRepo: "打开新记忆库",
       openDocumentFile: "打开文档文件",
+      reloadDocumentFile: "重新读取文件",
       lastUpdated: "最后更新",
       checkUpdate: "检查更新",
       updateNow: "更新",
@@ -434,8 +474,21 @@
       annotationNoCoveredNodes: "这个标注没有覆盖到可识别的文档内容",
       annotationNoAnnotations: "还没有可导出的标注",
       annotationExporting: "完成中",
-      annotationExported: "标注提示词已复制",
+      annotationExported: "标注已归档，提示词已复制",
+      annotationArchivedCopyFailed: "标注已归档，但提示词复制失败",
+      annotationArchivedWithMissingScreenshots: "标注已归档，部分截图不可用",
       annotationExportFailed: "标注导出失败",
+      annotationArchives: "标注归档",
+      annotationArchivesEmpty: "当前文档还没有标注归档",
+      annotationArchivesLoading: "正在读取标注归档",
+      annotationArchiveRestore: "恢复",
+      annotationArchiveRestored: "标注归档已恢复",
+      annotationArchiveCopyPrompt: "复制提示词",
+      annotationArchivePromptCopied: "归档提示词已复制",
+      annotationArchiveLoadFailed: "标注归档读取失败",
+      annotationArchiveRestoreFailed: "标注归档恢复失败",
+      annotationArchiveCopyFailed: "归档提示词复制失败",
+      annotationArchiveMissingScreenshots: "截图不可用",
       pullFailed: "Git 拉取失败",
       editAnnotation: "编辑标注备注",
       moveAnnotationNote: "拖动标注备注",
@@ -485,6 +538,7 @@
       noRecentRepos: "No recent repos",
       chooseNewRepo: "Open New Repo",
       openDocumentFile: "Open Document File",
+      reloadDocumentFile: "Reload File",
       lastUpdated: "Updated",
       checkUpdate: "Check for Updates",
       updateNow: "Update",
@@ -574,8 +628,21 @@
       annotationNoCoveredNodes: "This annotation did not cover recognizable document content",
       annotationNoAnnotations: "No annotations to export",
       annotationExporting: "Finishing",
-      annotationExported: "Annotation prompt copied",
+      annotationExported: "Annotations archived and prompt copied",
+      annotationArchivedCopyFailed: "Annotations archived, but prompt copy failed",
+      annotationArchivedWithMissingScreenshots: "Annotations archived with missing screenshots",
       annotationExportFailed: "Annotation export failed",
+      annotationArchives: "Annotation archives",
+      annotationArchivesEmpty: "No annotation archives for the current document",
+      annotationArchivesLoading: "Loading annotation archives",
+      annotationArchiveRestore: "Restore",
+      annotationArchiveRestored: "Annotation archive restored",
+      annotationArchiveCopyPrompt: "Copy prompt",
+      annotationArchivePromptCopied: "Archive prompt copied",
+      annotationArchiveLoadFailed: "Failed to load annotation archives",
+      annotationArchiveRestoreFailed: "Failed to restore annotation archive",
+      annotationArchiveCopyFailed: "Failed to copy archive prompt",
+      annotationArchiveMissingScreenshots: "Screenshots unavailable",
       pullFailed: "Git pull failed",
       editAnnotation: "Edit annotation note",
       moveAnnotationNote: "Move annotation note",
@@ -853,10 +920,15 @@
   let annotationNoteDrag: AnnotationNoteDrag | null = null;
   let annotationExporting = false;
   let annotationCaptureHidden = false;
+  let annotationArchives: AnnotationArchiveSummary[] = [];
+  let annotationArchivesOpen = false;
+  let annotationArchivesLoading = false;
+  let annotationArchiveBusyId = "";
 
   $: t = messages[locale];
   $: activeView = getOpenView(activeViewId);
   $: activeViewIsFile = activeView?.type === "file";
+  $: activeFilePath = activeView?.type === "file" ? activeView.path : "";
   $: activeRepoDocumentPath = activeView?.type === "repo" ? current?.path ?? "" : "";
   $: canNavigateBack = navigationIndex > 0;
   $: canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
@@ -889,10 +961,19 @@
   $: currentAnnotations = currentDocumentKey
     ? annotationsByPath.get(currentDocumentKey) ?? []
     : [];
+  $: currentDocumentArchives = currentDocumentKey
+    ? annotationArchives.filter((archive) => normalizePathname(archive.documentPath) === currentDocumentKey)
+    : annotationArchives;
+  $: currentDocumentArchiveCount = currentDocumentKey
+    ? currentDocumentArchives.length
+    : annotationArchives.length;
   $: annotationModeButtonLabel = annotationMode ? t.stopAnnotation : t.annotationMode;
   $: finishAnnotationButtonLabel = currentAnnotations.length
     ? `${t.finishAnnotations} ${currentAnnotations.length}`
     : t.finishAnnotations;
+  $: annotationArchivesButtonLabel = currentDocumentArchiveCount
+    ? `${t.annotationArchives} ${currentDocumentArchiveCount}`
+    : t.annotationArchives;
   $: if (
     !repoPath &&
     !snapshot &&
@@ -914,6 +995,7 @@
     void setupDragDrop();
     void initializeNativeOpenFlow();
     void checkForUpdates({ notifyNoUpdate: false, notifyError: false });
+    void refreshAnnotationArchives();
   });
 
   onDestroy(() => {
@@ -1623,6 +1705,17 @@
     void loadRepo(repoPath, { preserveCurrentDocument: true, pullBeforeScan: true });
   }
 
+  function refreshCurrentFile() {
+    if (!activeFilePath || repoBusy) {
+      return;
+    }
+
+    void openStandaloneDocument(activeFilePath, "", {
+      forceReload: true,
+      restoreScrollTop: getReaderScrollTop()
+    });
+  }
+
   async function loadRepo(path = repoPath, options: LoadRepoOptions = {}) {
     const nextRepoPath = path.trim();
     if (!nextRepoPath) {
@@ -1761,7 +1854,7 @@
       updateCurrentHistoryScroll();
     }
     const existing = findFileView(path);
-    if (existing && fileDocuments.has(existing.id)) {
+    if (existing && fileDocuments.has(existing.id) && !options.forceReload) {
       await activateView(existing.id);
       if (anchor) {
         await scrollToReaderAnchor(anchor);
@@ -3630,6 +3723,137 @@
     annotationsByPath = next;
   }
 
+  async function refreshAnnotationArchives(options: { notifyError?: boolean } = {}) {
+    if (!isTauri()) {
+      annotationArchives = [];
+      return;
+    }
+
+    annotationArchivesLoading = true;
+    try {
+      annotationArchives = await invoke<AnnotationArchiveSummary[]>("list_annotation_archives");
+    } catch (err) {
+      console.warn("Load annotation archives failed", err);
+      if (options.notifyError) {
+        showUpdateToast(`${t.annotationArchiveLoadFailed}: ${getErrorMessage(err)}`, "error");
+      }
+    } finally {
+      annotationArchivesLoading = false;
+    }
+  }
+
+  function openAnnotationArchives() {
+    annotationArchivesOpen = true;
+    void refreshAnnotationArchives({ notifyError: true });
+  }
+
+  function closeAnnotationArchives() {
+    annotationArchivesOpen = false;
+    annotationArchiveBusyId = "";
+  }
+
+  async function restoreAnnotationArchive(archiveId: string) {
+    if (!archiveId || annotationArchiveBusyId) {
+      return;
+    }
+
+    annotationArchiveBusyId = archiveId;
+    try {
+      const record = await invoke<AnnotationArchiveRecord>("read_annotation_archive", { archiveId });
+      const document = record.payload.documents[0];
+      if (!document) {
+        throw new Error(t.annotationArchivesEmpty);
+      }
+
+      const restored = document.annotations.map((annotation) =>
+        restoreAnnotationItem(document, annotation)
+      );
+      const restoredKey = normalizePathname(document.path);
+      setAnnotationsForPath(restoredKey, mergeRestoredAnnotations(restoredKey, restored));
+      annotationMode = true;
+      editingAnnotationId = restored[0]?.id ?? "";
+      annotationArchivesOpen = false;
+      await openRestoredAnnotationDocument(document);
+      if (editingAnnotationId) {
+        void focusEditingAnnotationNote(editingAnnotationId);
+      }
+      showUpdateToast(`${t.annotationArchiveRestored}: ${record.summary.readmePath}`);
+    } catch (err) {
+      showUpdateToast(`${t.annotationArchiveRestoreFailed}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      annotationArchiveBusyId = "";
+    }
+  }
+
+  async function copyAnnotationArchivePrompt(archiveId: string) {
+    if (!archiveId || annotationArchiveBusyId) {
+      return;
+    }
+
+    annotationArchiveBusyId = archiveId;
+    try {
+      await invoke<string>("copy_annotation_archive_prompt", { archiveId });
+      showUpdateToast(t.annotationArchivePromptCopied);
+    } catch (err) {
+      showUpdateToast(`${t.annotationArchiveCopyFailed}: ${getErrorMessage(err)}`, "error");
+    } finally {
+      annotationArchiveBusyId = "";
+    }
+  }
+
+  function restoreAnnotationItem(
+    document: AnnotationExportPayload["documents"][number],
+    annotation: AnnotationExportPayload["documents"][number]["annotations"][number]
+  ): AnnotationItem {
+    return {
+      id: annotation.id,
+      note: annotation.note,
+      rect: annotation.rect,
+      notePosition: annotation.notePosition ?? null,
+      noteCollapsed: Boolean(annotation.noteCollapsed),
+      coveredNodes: annotation.coveredNodes,
+      document: {
+        path: document.path,
+        relativePath: document.relativePath,
+        repoPath: document.repoPath,
+        title: document.title,
+        kind: document.kind
+      }
+    };
+  }
+
+  function mergeRestoredAnnotations(path: string, restored: AnnotationItem[]) {
+    const restoredIds = new Set(restored.map((annotation) => annotation.id));
+    const existing = annotationsByPath.get(path) ?? [];
+    return [...existing.filter((annotation) => !restoredIds.has(annotation.id)), ...restored];
+  }
+
+  async function openRestoredAnnotationDocument(document: AnnotationExportPayload["documents"][number]) {
+    if (repoPath && document.repoPath && normalizePathname(document.repoPath) === normalizePathname(repoPath)) {
+      await openDocument(document.path);
+      return;
+    }
+
+    await openStandaloneDocument(document.path);
+  }
+
+  function formatAnnotationArchiveDate(value: number) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "-";
+    }
+    return new Intl.DateTimeFormat(locale, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(date);
+  }
+
+  function annotationArchivePathLabel(archive: AnnotationArchiveSummary) {
+    return archive.documentRelativePath || archive.documentPath;
+  }
+
   function updateAnnotationNote(id: string, note: string) {
     if (!currentDocumentKey) {
       return;
@@ -3807,6 +4031,7 @@
   }
 
   async function finishCurrentPageAnnotations() {
+    const exportDocumentKey = currentDocumentKey;
     if (!currentAnnotations.length) {
       showUpdateToast(t.annotationNoAnnotations, "error");
       return;
@@ -3827,12 +4052,22 @@
       await nextAnimationFrame();
       const payload = await buildAnnotationExportPayload(currentAnnotations);
       const result = await invoke<AnnotationExportResult>("finish_annotation_export", { payload });
-      if (currentDocumentKey) {
-        setAnnotationsForPath(currentDocumentKey, []);
+      await refreshAnnotationArchives();
+      if (exportDocumentKey) {
+        setAnnotationsForPath(exportDocumentKey, []);
       }
       annotationMode = false;
       editingAnnotationId = "";
-      showUpdateToast(`${t.annotationExported}: ${result.readmePath}`);
+      if (!result.promptCopied) {
+        showUpdateToast(
+          `${t.annotationArchivedCopyFailed}: ${result.promptCopyError ?? result.readmePath}`,
+          "error"
+        );
+      } else if (result.screenshotUnavailableCount) {
+        showUpdateToast(`${t.annotationArchivedWithMissingScreenshots}: ${result.readmePath}`);
+      } else {
+        showUpdateToast(`${t.annotationExported}: ${result.readmePath}`);
+      }
     } catch (err) {
       editingAnnotationId = previousEditingAnnotationId;
       showUpdateToast(`${t.annotationExportFailed}: ${getErrorMessage(err)}`, "error");
@@ -3863,6 +4098,8 @@
             id: annotation.id,
             note: annotation.note.trim(),
             rect: annotation.rect,
+            notePosition: annotation.notePosition ?? null,
+            noteCollapsed: annotation.noteCollapsed ?? false,
             coveredNodes: annotation.coveredNodes,
             visualEvidence:
               visualEvidenceById.get(annotation.id) ??
@@ -5250,7 +5487,23 @@
         </div>
       </div>
       <div class="head-actions">
-        {#if !activeViewIsFile && repoPath}
+        {#if activeViewIsFile}
+          <button
+            class="ghost icon-button reader-refresh"
+            type="button"
+            disabled={repoBusy || !activeFilePath}
+            aria-label={t.reloadDocumentFile}
+            title={t.reloadDocumentFile}
+            on:click={refreshCurrentFile}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6v5h-5" />
+              <path d="M4 18v-5h5" />
+              <path d="M18.4 9A7 7 0 0 0 6.2 7.2L4 9.3" />
+              <path d="M5.6 15A7 7 0 0 0 17.8 16.8L20 14.7" />
+            </svg>
+          </button>
+        {:else if repoPath}
           <button
             class="ghost icon-button reader-refresh"
             type="button"
@@ -5298,6 +5551,24 @@
           <span>{annotationExporting ? t.annotationExporting : t.finishAnnotations}</span>
           {#if currentAnnotations.length}
             <strong>{currentAnnotations.length}</strong>
+          {/if}
+        </button>
+        <button
+          class="ghost annotation-archives-button"
+          type="button"
+          disabled={!current || annotationExporting}
+          aria-label={annotationArchivesButtonLabel}
+          title={annotationArchivesButtonLabel}
+          on:click={openAnnotationArchives}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6.5 12 3l8 3.5v11L12 21l-8-3.5z" />
+            <path d="M4 6.5 12 10l8-3.5" />
+            <path d="M12 10v11" />
+          </svg>
+          <span>{t.annotationArchives}</span>
+          {#if currentDocumentArchiveCount}
+            <strong>{currentDocumentArchiveCount}</strong>
           {/if}
         </button>
         <button
@@ -5603,6 +5874,73 @@
         {updateToastTone === "error" ? "!" : ""}
       </span>
       <span>{updateToastMessage}</span>
+    </div>
+  {/if}
+
+  {#if annotationArchivesOpen}
+    <div class="update-modal" role="dialog" aria-modal="true" aria-label={t.annotationArchives}>
+      <section class="annotation-archives-dialog">
+        <div class="annotation-archives-head">
+          <div>
+            <div class="eyebrow">{t.annotationArchives}</div>
+            <h2>{headerTitle}</h2>
+            <p>{headerPath}</p>
+          </div>
+          <button
+            class="ghost icon-button"
+            type="button"
+            aria-label={t.closeUpdateDialog}
+            title={t.closeUpdateDialog}
+            on:click={closeAnnotationArchives}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {#if annotationArchivesLoading}
+          <div class="annotation-archives-empty">{t.annotationArchivesLoading}</div>
+        {:else if currentDocumentArchives.length}
+          <div class="annotation-archive-list">
+            {#each currentDocumentArchives as archive (archive.archiveId)}
+              <article class="annotation-archive-item">
+                <div class="annotation-archive-main">
+                  <div class="annotation-archive-title">
+                    <strong>{formatAnnotationArchiveDate(archive.createdAtUnixMs)}</strong>
+                    <span>{archive.annotationCount}</span>
+                  </div>
+                  <p>{annotationArchivePathLabel(archive)}</p>
+                  {#if archive.screenshotUnavailableCount}
+                    <small>{t.annotationArchiveMissingScreenshots}: {archive.screenshotUnavailableCount}</small>
+                  {/if}
+                </div>
+                <div class="annotation-archive-actions">
+                  <button
+                    class="ghost"
+                    type="button"
+                    disabled={Boolean(annotationArchiveBusyId)}
+                    on:click={() => copyAnnotationArchivePrompt(archive.archiveId)}
+                  >
+                    {t.annotationArchiveCopyPrompt}
+                  </button>
+                  <button
+                    class="primary"
+                    type="button"
+                    disabled={Boolean(annotationArchiveBusyId)}
+                    on:click={() => restoreAnnotationArchive(archive.archiveId)}
+                  >
+                    {t.annotationArchiveRestore}
+                  </button>
+                </div>
+              </article>
+            {/each}
+          </div>
+        {:else}
+          <div class="annotation-archives-empty">{t.annotationArchivesEmpty}</div>
+        {/if}
+      </section>
     </div>
   {/if}
 
