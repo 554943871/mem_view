@@ -1,8 +1,12 @@
 # Changelog
 
-## v0.2.32
+## v0.2.33
 
 - Fixed Markdown table mouse-wheel handling so vertical scrolling continues to move the reader while the pointer is over a horizontally scrollable table.
+- Fixed native file-open handling so opening `.md`, `.markdown`, `.html`, or `.htm` files with memView opens the selected file directly instead of stopping on the repository picker.
+- Fixed annotation note entry so drawing or selecting an annotation focuses the note text field immediately.
+- Added a drag handle to annotation notes so the note editor can be moved away from covered content.
+- Added per-annotation note collapse and expand switch controls that fully collapse notes into compact toolbars on heavily annotated pages.
 
 ## v0.2.31
 

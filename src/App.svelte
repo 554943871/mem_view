@@ -1,6 +1,6 @@
 <script lang="ts">
   import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -132,8 +132,24 @@
     id: string;
     note: string;
     rect: AnnotationRect;
+    notePosition?: AnnotationNotePosition | null;
+    noteCollapsed?: boolean;
     coveredNodes: AnnotationCoveredNode[];
     document: AnnotationDocumentMeta;
+  };
+  type AnnotationNotePosition = {
+    left: number;
+    top: number;
+  };
+  type AnnotationNoteDrag = {
+    id: string;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startLeft: number;
+    startTop: number;
+    noteWidth: number;
+    noteHeight: number;
   };
   type AnnotationDraft = {
     startX: number;
@@ -301,6 +317,9 @@
     annotationExportFailed: string;
     pullFailed: string;
     editAnnotation: string;
+    moveAnnotationNote: string;
+    collapseAnnotationNote: string;
+    expandAnnotationNote: string;
     deleteAnnotation: string;
     status: Record<StatusKey, string>;
     kinds: Record<string, string>;
@@ -419,6 +438,9 @@
       annotationExportFailed: "标注导出失败",
       pullFailed: "Git 拉取失败",
       editAnnotation: "编辑标注备注",
+      moveAnnotationNote: "拖动标注备注",
+      collapseAnnotationNote: "收起标注备注",
+      expandAnnotationNote: "展开标注备注",
       deleteAnnotation: "删除标注",
       status: {
         idle: "待选择",
@@ -556,6 +578,9 @@
       annotationExportFailed: "Annotation export failed",
       pullFailed: "Git pull failed",
       editAnnotation: "Edit annotation note",
+      moveAnnotationNote: "Move annotation note",
+      collapseAnnotationNote: "Collapse annotation note",
+      expandAnnotationNote: "Expand annotation note",
       deleteAnnotation: "Delete annotation",
       status: {
         idle: "Choose Repo",
@@ -812,6 +837,8 @@
   let locale: Locale = getInitialLocale();
   let isDragHovering = false;
   let dragDropUnlisten: UnlistenFn | null = null;
+  let fileOpenUnlisten: UnlistenFn | null = null;
+  let startupFileOpenChecked = !isTauri();
   let findOpen = false;
   let findQuery = "";
   let findMatchCount = 0;
@@ -823,6 +850,7 @@
   let annotationPointerId: number | null = null;
   let annotationsByPath = new Map<string, AnnotationItem[]>();
   let editingAnnotationId = "";
+  let annotationNoteDrag: AnnotationNoteDrag | null = null;
   let annotationExporting = false;
   let annotationCaptureHidden = false;
 
@@ -869,6 +897,7 @@
     !repoPath &&
     !snapshot &&
     !current &&
+    startupFileOpenChecked &&
     status === "idle" &&
     selectedRecentRepoPath &&
     autoLoadingRecentRepoPath !== selectedRecentRepoPath
@@ -883,11 +912,8 @@
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("beforeunload", handleBeforeUnload);
     void setupDragDrop();
+    void initializeNativeOpenFlow();
     void checkForUpdates({ notifyNoUpdate: false, notifyError: false });
-    const initialPath = repoPath || selectedRecentRepoPath;
-    if (initialPath) {
-      void loadRepo(initialPath);
-    }
   });
 
   onDestroy(() => {
@@ -895,6 +921,7 @@
     window.removeEventListener("resize", handleWindowResize);
     window.removeEventListener("beforeunload", handleBeforeUnload);
     dragDropUnlisten?.();
+    fileOpenUnlisten?.();
     teardownHtmlFrameBridge();
     if (copyDiagramResetTimer !== null) {
       window.clearTimeout(copyDiagramResetTimer);
@@ -930,6 +957,48 @@
     } catch (err) {
       console.warn("File drag and drop setup failed", err);
     }
+  }
+
+  async function initializeNativeOpenFlow() {
+    let openedSystemFiles = false;
+
+    try {
+      fileOpenUnlisten = await listen<string[]>("mem-view-open-files", () => {
+        void openPendingSystemDocumentFiles();
+      });
+      openedSystemFiles = await openPendingSystemDocumentFiles();
+    } catch (err) {
+      console.warn("Native file open setup failed", err);
+    } finally {
+      startupFileOpenChecked = true;
+    }
+
+    const initialPath = repoPath || selectedRecentRepoPath;
+    if (initialPath && !openedSystemFiles) {
+      void loadRepo(initialPath);
+    }
+  }
+
+  async function openPendingSystemDocumentFiles() {
+    if (!isTauri()) {
+      return false;
+    }
+
+    try {
+      const paths = await invoke<string[]>("take_pending_open_files");
+      return openSystemDocumentFiles(paths);
+    } catch (err) {
+      console.warn("Failed to read pending native file opens", err);
+      return false;
+    }
+  }
+
+  async function openSystemDocumentFiles(paths: string[]) {
+    const documentPaths = paths.filter(isDocumentPath);
+    for (const path of documentPaths) {
+      await openStandaloneDocument(path);
+    }
+    return documentPaths.length > 0;
   }
 
   async function openDroppedDocumentFiles(paths: string[]) {
@@ -3522,7 +3591,33 @@
     };
     const next = [...currentAnnotations, annotation];
     setAnnotationsForPath(currentDocumentKey, next);
-    editingAnnotationId = annotation.id;
+    editAnnotation(annotation.id);
+  }
+
+  function editAnnotation(id: string) {
+    if (currentAnnotations.find((annotation) => annotation.id === id)?.noteCollapsed) {
+      updateAnnotationNoteCollapsed(id, false);
+    }
+    editingAnnotationId = id;
+    void focusEditingAnnotationNote(id);
+  }
+
+  async function focusEditingAnnotationNote(id: string) {
+    await tick();
+    if (editingAnnotationId !== id || !readerElement) {
+      return;
+    }
+
+    const textarea = Array.from(
+      readerElement.querySelectorAll<HTMLTextAreaElement>(".annotation-note textarea")
+    ).find((element) => element.dataset.annotationId === id);
+    if (!textarea) {
+      return;
+    }
+
+    textarea.focus({ preventScroll: true });
+    const cursorPosition = textarea.value.length;
+    textarea.setSelectionRange(cursorPosition, cursorPosition);
   }
 
   function setAnnotationsForPath(path: string, items: AnnotationItem[]) {
@@ -3547,6 +3642,46 @@
     );
   }
 
+  function updateAnnotationNotePosition(id: string, notePosition: AnnotationNotePosition) {
+    if (!currentDocumentKey) {
+      return;
+    }
+    setAnnotationsForPath(
+      currentDocumentKey,
+      currentAnnotations.map((annotation) =>
+        annotation.id === id ? { ...annotation, notePosition } : annotation
+      )
+    );
+  }
+
+  function updateAnnotationNoteCollapsed(id: string, noteCollapsed: boolean) {
+    if (!currentDocumentKey) {
+      return;
+    }
+    setAnnotationsForPath(
+      currentDocumentKey,
+      currentAnnotations.map((annotation) =>
+        annotation.id === id ? { ...annotation, noteCollapsed } : annotation
+      )
+    );
+    if (noteCollapsed && editingAnnotationId === id) {
+      editingAnnotationId = "";
+    }
+  }
+
+  function toggleAnnotationNoteCollapsed(id: string) {
+    const annotation = currentAnnotations.find((item) => item.id === id);
+    if (!annotation) {
+      return;
+    }
+
+    const noteCollapsed = !annotation.noteCollapsed;
+    updateAnnotationNoteCollapsed(id, noteCollapsed);
+    if (!noteCollapsed) {
+      editAnnotation(id);
+    }
+  }
+
   function removeAnnotation(id: string) {
     if (!currentDocumentKey) {
       return;
@@ -3561,8 +3696,17 @@
   }
 
   function annotationNotePlacement(annotation: AnnotationItem) {
+    if (annotation.notePosition) {
+      return {
+        className: "custom",
+        left: annotation.notePosition.left,
+        top: annotation.notePosition.top,
+        style: `left: ${annotation.notePosition.left}px; top: ${annotation.notePosition.top}px`
+      };
+    }
+
     const gap = 10;
-    const noteWidth = editingAnnotationId === annotation.id ? 300 : 278;
+    const noteWidth = annotationNoteWidth(annotation);
     const viewportLeft = readerElement?.scrollLeft ?? 0;
     const viewportRight = viewportLeft + (readerElement?.clientWidth ?? 0);
     const preferredRight = annotation.rect.left + annotation.rect.width + gap;
@@ -3573,7 +3717,88 @@
 
     return {
       className: canPlaceRight ? "right" : "left",
+      left: roundNumber(left),
+      top: annotation.rect.top,
       style: `left: ${roundNumber(left)}px; top: ${annotation.rect.top}px`
+    };
+  }
+
+  function annotationNoteWidth(annotation: AnnotationItem) {
+    if (annotation.noteCollapsed) {
+      return 52;
+    }
+    return 300;
+  }
+
+  function startAnnotationNoteDrag(annotation: AnnotationItem, event: PointerEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const handle = event.currentTarget as HTMLElement;
+    const noteElement = handle.closest<HTMLElement>(".annotation-note");
+    const placement = annotationNotePlacement(annotation);
+    const noteWidth = annotationNoteWidth(annotation);
+    const minNoteHeight = annotation.noteCollapsed ? 24 : 96;
+    annotationNoteDrag = {
+      id: annotation.id,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeft: placement.left,
+      startTop: placement.top,
+      noteWidth: Math.max(noteElement?.offsetWidth ?? noteWidth, noteWidth),
+      noteHeight: Math.max(noteElement?.offsetHeight ?? minNoteHeight, minNoteHeight)
+    };
+    handle.setPointerCapture(event.pointerId);
+    if (annotation.noteCollapsed) {
+      editingAnnotationId = "";
+    } else {
+      editAnnotation(annotation.id);
+    }
+  }
+
+  function moveAnnotationNote(event: PointerEvent) {
+    if (!annotationNoteDrag || annotationNoteDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const left = annotationNoteDrag.startLeft + event.clientX - annotationNoteDrag.startClientX;
+    const top = annotationNoteDrag.startTop + event.clientY - annotationNoteDrag.startClientY;
+    updateAnnotationNotePosition(
+      annotationNoteDrag.id,
+      clampAnnotationNotePosition(left, top, annotationNoteDrag.noteWidth, annotationNoteDrag.noteHeight)
+    );
+  }
+
+  function endAnnotationNoteDrag(event: PointerEvent) {
+    if (!annotationNoteDrag || annotationNoteDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if ((event.currentTarget as HTMLElement).hasPointerCapture(event.pointerId)) {
+      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    }
+    annotationNoteDrag = null;
+  }
+
+  function clampAnnotationNotePosition(
+    left: number,
+    top: number,
+    noteWidth: number,
+    noteHeight: number
+  ): AnnotationNotePosition {
+    const minLeft = (readerElement?.scrollLeft ?? 0) + 8;
+    const minTop = (readerElement?.scrollTop ?? 0) + 8;
+    const maxLeft = Math.max(minLeft, minLeft + (readerElement?.clientWidth ?? noteWidth) - noteWidth - 16);
+    const maxTop = Math.max(minTop, minTop + (readerElement?.clientHeight ?? noteHeight) - noteHeight - 16);
+
+    return {
+      left: roundNumber(clampNumber(left, minLeft, maxLeft)),
+      top: roundNumber(clampNumber(top, minTop, maxTop))
     };
   }
 
@@ -3588,7 +3813,7 @@
     }
     const incomplete = currentAnnotations.find((annotation) => !annotation.note.trim());
     if (incomplete) {
-      editingAnnotationId = incomplete.id;
+      editAnnotation(incomplete.id);
       showUpdateToast(t.annotationEmptyNote, "error");
       return;
     }
@@ -5201,11 +5426,11 @@
               tabindex="0"
               aria-label={t.editAnnotation}
               on:pointerdown={(event) => event.stopPropagation()}
-              on:click={() => (editingAnnotationId = annotation.id)}
+              on:click={() => editAnnotation(annotation.id)}
               on:keydown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  editingAnnotationId = annotation.id;
+                  editAnnotation(annotation.id);
                 }
               }}
             ></div>
@@ -5224,31 +5449,67 @@
             <div
               class={`annotation-note ${notePlacement.className}`}
               class:active={editingAnnotationId === annotation.id}
+              class:collapsed={annotation.noteCollapsed}
+              class:dragging={annotationNoteDrag?.id === annotation.id}
               style={notePlacement.style}
               role="group"
               aria-label={t.editAnnotation}
               on:pointerdown={(event) => {
                 event.stopPropagation();
-                editingAnnotationId = annotation.id;
+                if (event.target instanceof HTMLTextAreaElement) {
+                  return;
+                }
+                editAnnotation(annotation.id);
               }}
             >
-              {#if editingAnnotationId === annotation.id}
+              <div class="annotation-note-toolbar">
+                <button
+                  class="annotation-note-drag-handle"
+                  type="button"
+                  aria-label={t.moveAnnotationNote}
+                  title={t.moveAnnotationNote}
+                  on:pointerdown={(event) => startAnnotationNoteDrag(annotation, event)}
+                  on:pointermove={moveAnnotationNote}
+                  on:pointerup={endAnnotationNoteDrag}
+                  on:pointercancel={endAnnotationNoteDrag}
+                >
+                  <span class="annotation-note-grip" aria-hidden="true"></span>
+                </button>
+                <button
+                  class="annotation-note-toggle"
+                  type="button"
+                  aria-label={annotation.noteCollapsed ? t.expandAnnotationNote : t.collapseAnnotationNote}
+                  title={annotation.noteCollapsed ? t.expandAnnotationNote : t.collapseAnnotationNote}
+                  aria-expanded={!annotation.noteCollapsed}
+                  on:pointerdown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleAnnotationNoteCollapsed(annotation.id);
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    {#if annotation.noteCollapsed}
+                      <path d="M4 6l4 4 4-4" />
+                    {:else}
+                      <path d="M4 10l4-4 4 4" />
+                    {/if}
+                  </svg>
+                </button>
+              </div>
+              {#if !annotation.noteCollapsed}
                 <textarea
+                  data-annotation-id={annotation.id}
                   value={annotation.note}
                   placeholder={t.annotationNotePlaceholder}
                   aria-label={t.editAnnotation}
+                  on:focus={() => (editingAnnotationId = annotation.id)}
                   on:input={(event) => updateAnnotationNote(annotation.id, event.currentTarget.value)}
-                  on:blur={() => (editingAnnotationId = "")}
+                  on:blur={() => {
+                    if (!annotationNoteDrag) {
+                      editingAnnotationId = "";
+                    }
+                  }}
                 ></textarea>
-              {:else}
-                <button
-                  class="annotation-note-text"
-                  type="button"
-                  title={t.editAnnotation}
-                  on:click={() => (editingAnnotationId = annotation.id)}
-                >
-                  {annotation.note || t.annotationNotePlaceholder}
-                </button>
               {/if}
             </div>
           {/each}

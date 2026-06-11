@@ -3,10 +3,13 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
+use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +26,9 @@ struct GitPullResult {
     root_path: String,
     message: String,
 }
+
+#[derive(Default)]
+struct PendingOpenFiles(Mutex<Vec<String>>);
 
 #[derive(Debug, Serialize)]
 struct RepoCounts {
@@ -286,6 +292,18 @@ fn read_standalone_document(path: String) -> Result<Document, String> {
 #[tauri::command]
 fn read_markdown_file(path: String) -> Result<Document, String> {
     read_standalone_document(path)
+}
+
+#[tauri::command]
+fn take_pending_open_files(
+    state: tauri::State<'_, PendingOpenFiles>,
+) -> Result<Vec<String>, String> {
+    let mut pending = state
+        .0
+        .lock()
+        .map_err(|_| "待打开文件队列已损坏".to_string())?;
+
+    Ok(std::mem::take(&mut *pending))
 }
 
 #[tauri::command]
@@ -1177,6 +1195,77 @@ fn canonical_readable_document_file(requested: &Path) -> Result<PathBuf, String>
     Ok(canonical)
 }
 
+fn system_open_document_paths_from_args(args: impl IntoIterator<Item = OsString>) -> Vec<String> {
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    args.into_iter()
+        .filter_map(|arg| system_open_document_path_from_arg(arg, &current_dir))
+        .collect()
+}
+
+fn system_open_document_path_from_arg(arg: OsString, current_dir: &Path) -> Option<String> {
+    let value = arg.to_string_lossy();
+    if value.is_empty() || value.starts_with("-psn_") || value.starts_with("--") {
+        return None;
+    }
+
+    let path = PathBuf::from(&arg);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        current_dir.join(path)
+    };
+    system_open_document_path(path)
+}
+
+fn system_open_document_path(path: PathBuf) -> Option<String> {
+    let canonical = canonical_readable_document_file(&path).ok()?;
+    Some(canonical.to_string_lossy().to_string())
+}
+
+fn system_open_document_paths_from_urls(urls: Vec<tauri::Url>) -> Vec<String> {
+    urls.into_iter()
+        .filter_map(|url| url.to_file_path().ok())
+        .filter_map(system_open_document_path)
+        .collect()
+}
+
+fn queue_system_open_files(app: &tauri::AppHandle, paths: Vec<String>) {
+    let paths = unique_paths(paths);
+    if paths.is_empty() {
+        return;
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+
+    match app.state::<PendingOpenFiles>().0.lock() {
+        Ok(mut pending) => {
+            pending.extend(paths.clone());
+            *pending = unique_paths(std::mem::take(&mut *pending));
+        }
+        Err(_) => {
+            eprintln!("memView open-file queue is poisoned");
+        }
+    }
+
+    if let Err(err) = app.emit("mem-view-open-files", paths) {
+        eprintln!("failed to emit mem-view-open-files: {}", err);
+    }
+}
+
+fn unique_paths(paths: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if !path.trim().is_empty() && !unique.iter().any(|item| item == &path) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
 fn document_content_type(path: &Path) -> Option<&'static str> {
     match path
         .extension()
@@ -1317,10 +1406,14 @@ fn pretty_segment(segment: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(PendingOpenFiles::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            let initial_paths = system_open_document_paths_from_args(std::env::args_os().skip(1));
+            queue_system_open_files(app.handle(), initial_paths);
+
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -1336,10 +1429,17 @@ pub fn run() {
             finish_annotation_export,
             capture_annotation_screenshot,
             copy_svg_to_clipboard,
-            copy_image_to_clipboard
+            copy_image_to_clipboard,
+            take_pending_open_files
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running memView");
+        .build(tauri::generate_context!())
+        .expect("error while building memView")
+        .run(|app_handle, event| {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            if let tauri::RunEvent::Opened { urls } = event {
+                queue_system_open_files(app_handle, system_open_document_paths_from_urls(urls));
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1510,6 +1610,57 @@ mod tests {
             .expect_err("unsupported file should be rejected");
 
         assert!(err.contains("Markdown 或 HTML"));
+    }
+
+    #[test]
+    fn resolves_system_open_document_paths_from_args() {
+        let root = build_temp_dir("system-open-args");
+        fs::create_dir_all(&root).expect("system open test dir should create");
+        let markdown_path = root.join("direct.md");
+        let text_path = root.join("note.txt");
+        fs::write(&markdown_path, "# Direct\n").expect("markdown file should write");
+        fs::write(&text_path, "not markdown").expect("text file should write");
+
+        assert_eq!(
+            system_open_document_path_from_arg(OsString::from("direct.md"), &root),
+            Some(
+                markdown_path
+                    .canonicalize()
+                    .expect("markdown path should canonicalize")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            system_open_document_paths_from_args(vec![
+                OsString::from("-psn_0_123"),
+                markdown_path.clone().into_os_string(),
+                text_path.into_os_string(),
+                OsString::from("--flag")
+            ]),
+            vec![markdown_path
+                .canonicalize()
+                .expect("markdown path should canonicalize")
+                .to_string_lossy()
+                .to_string()]
+        );
+    }
+
+    #[test]
+    fn resolves_system_open_document_paths_from_file_urls() {
+        let root = build_temp_dir("system-open-urls");
+        fs::create_dir_all(&root).expect("system open test dir should create");
+        let path = root.join("direct.html");
+        fs::write(&path, "<!doctype html><title>Direct</title>\n")
+            .expect("html file should write");
+        let canonical = path
+            .canonicalize()
+            .expect("html path should canonicalize")
+            .to_string_lossy()
+            .to_string();
+        let url = tauri::Url::from_file_path(&path).expect("file URL should build");
+
+        assert_eq!(system_open_document_paths_from_urls(vec![url]), vec![canonical]);
     }
 
     #[test]

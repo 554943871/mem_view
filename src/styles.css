@@ -997,9 +997,21 @@ h1 {
   z-index: 26;
 }
 
+.annotation-note.dragging {
+  box-shadow: 0 14px 32px rgba(31, 41, 51, 0.22);
+}
+
 .annotation-note.editing,
 .annotation-note.active {
   width: 300px;
+}
+
+.annotation-note:not(.collapsed) {
+  width: 300px;
+}
+
+.annotation-note.collapsed {
+  width: 52px;
 }
 
 .annotation-note.left {
@@ -1010,22 +1022,69 @@ h1 {
   transform-origin: left top;
 }
 
-.annotation-note-text {
+.annotation-note-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 26px;
+  min-height: 22px;
+  border-bottom: 1px solid #ead49a;
+  background: linear-gradient(180deg, #fff7df 0%, #ffefbd 100%);
+}
+
+.annotation-note.collapsed .annotation-note-toolbar {
+  grid-template-columns: repeat(2, 26px);
+  border-bottom: 0;
+}
+
+.annotation-note-drag-handle {
+  display: grid;
+  min-height: 22px;
+  place-items: center;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: #6b4b13;
+  cursor: grab;
+  touch-action: none;
 }
 
-.annotation-note-text {
-  min-height: 34px;
-  overflow: hidden;
-  padding: 8px 10px;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.annotation-note-drag-handle:active {
+  cursor: grabbing;
 }
 
-.annotation-note-text:hover,
+.annotation-note-grip {
+  width: 14px;
+  height: 8px;
+  background-image: radial-gradient(currentColor 1px, transparent 1.5px);
+  background-position: 0 0;
+  background-size: 6px 4px;
+  opacity: 0.72;
+}
+
+.annotation-note-toggle {
+  display: grid;
+  width: 100%;
+  min-height: 22px;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid #ead49a;
+  background: transparent;
+  color: #5f4211;
+  cursor: pointer;
+}
+
+.annotation-note-toggle:hover {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.annotation-note-toggle svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .annotation-note textarea:hover {
   background: #ffefbd;
 }
