@@ -8,6 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
@@ -172,6 +174,8 @@ struct AnnotationVisualEvidence {
     screenshot_path: Option<String>,
     capture_padding: f64,
     capture_rect: Option<AnnotationCaptureRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_method: Option<String>,
     capture_status: AnnotationCaptureStatus,
     capture_error: Option<String>,
 }
@@ -469,6 +473,16 @@ fn capture_annotation_screenshot(capture_rect: AnnotationCaptureRect) -> Result<
     Ok(screenshot_path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+async fn capture_annotation_webview_snapshot(
+    window: tauri::WebviewWindow,
+    capture_rect: AnnotationCaptureRect,
+) -> Result<String, String> {
+    let screenshot_path = annotation_capture_temp_file_path(&std::env::temp_dir());
+    capture_webview_region_to_png(&window, &capture_rect, &screenshot_path).await?;
+    Ok(screenshot_path.to_string_lossy().to_string())
+}
+
 fn write_annotation_export(
     mut payload: AnnotationExportPayload,
     archive_root: &Path,
@@ -728,6 +742,7 @@ fn unavailable_visual_evidence(
         screenshot_path: None,
         capture_padding,
         capture_rect,
+        capture_method: None,
         capture_status: AnnotationCaptureStatus::Unavailable,
         capture_error: Some(capture_error.into()),
     }
@@ -830,7 +845,7 @@ fn build_annotation_readme(
 - `annotations[].coveredNodes`：memView 根据框选区域推断出的候选文档节点，不是绝对真相。
 - `coveredNodes[].sourceLines`、`textExcerpt`、`headingPath`：优先用于定位源文；HTML 文档可能没有 sourceLines，优先级高于截图。
 - `annotations[].rect`：用户框选区域在 reader 内容坐标系里的位置，不是屏幕坐标。
-- `annotations[].visualEvidence`：截图辅助信息。`screenshotPath` 指向局部 PNG；`captureRect` 是生成截图时使用的屏幕坐标；`captureStatus` 为 `captured` 才表示截图可用。
+- `annotations[].visualEvidence`：截图辅助信息。`screenshotPath` 指向局部 PNG；`captureMethod` 标识截图来源；`captureRect` 是生成截图时使用的 WebView 坐标；`captureStatus` 为 `captured` 才表示截图可用。
 
 ## 视觉证据使用原则
 
@@ -903,6 +918,112 @@ fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|err| format!("写入系统剪贴板失败：{}", err))
+}
+
+#[cfg(target_os = "macos")]
+async fn capture_webview_region_to_png(
+    window: &tauri::WebviewWindow,
+    rect: &AnnotationCaptureRect,
+    path: &Path,
+) -> Result<(), String> {
+    let (x, y, width, height) = normalized_capture_rect(rect)?;
+    let capture_rect = AnnotationCaptureRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+
+    window
+        .with_webview(move |webview| unsafe {
+            request_webview_snapshot_png(webview.inner(), capture_rect, sender);
+        })
+        .map_err(|err| format!("获取 WebView 失败：{}", err))?;
+
+    let bytes = tokio::time::timeout(Duration::from_secs(8), receiver.recv())
+        .await
+        .map_err(|_| "WebView 标注截图超时".to_string())?
+        .ok_or_else(|| "WebView 标注截图中断".to_string())??;
+    fs::write(path, bytes).map_err(|err| format!("写入截图失败：{} ({})", path.display(), err))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn capture_webview_region_to_png(
+    _window: &tauri::WebviewWindow,
+    _rect: &AnnotationCaptureRect,
+    _path: &Path,
+) -> Result<(), String> {
+    Err("当前平台暂不支持 WebView 标注截图".to_string())
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn request_webview_snapshot_png(
+    webview: *mut std::ffi::c_void,
+    rect: AnnotationCaptureRect,
+    sender: tauri::async_runtime::Sender<Result<Vec<u8>, String>>,
+) {
+    use block2::RcBlock;
+    use objc2::MainThreadMarker;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_foundation::NSNumber;
+    use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
+
+    let view = match webview.cast::<WKWebView>().as_ref() {
+        Some(view) => view,
+        None => {
+            let _ = sender.try_send(Err("WebView 标注截图失败：WKWebView 句柄为空".to_string()));
+            return;
+        }
+    };
+    let mtm = MainThreadMarker::new_unchecked();
+    let configuration = WKSnapshotConfiguration::new(mtm);
+    let snapshot_rect = CGRect::new(
+        CGPoint::new(rect.x, rect.y),
+        CGSize::new(rect.width, rect.height),
+    );
+    configuration.setRect(snapshot_rect);
+    configuration.setSnapshotWidth(Some(&NSNumber::new_f64(rect.width)));
+    configuration.setAfterScreenUpdates(true);
+
+    let completion = RcBlock::new(
+        move |image: *mut objc2_app_kit::NSImage, error: *mut objc2_foundation::NSError| {
+            let result = unsafe { webview_snapshot_png_bytes(image, error) };
+            let _ = sender.try_send(result);
+        },
+    );
+    view.takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &completion);
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn webview_snapshot_png_bytes(
+    image: *mut objc2_app_kit::NSImage,
+    error: *mut objc2_foundation::NSError,
+) -> Result<Vec<u8>, String> {
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey};
+    use objc2_foundation::NSDictionary;
+
+    if !error.is_null() {
+        return Err("WebKit 生成标注截图失败".to_string());
+    }
+    let image = image
+        .as_ref()
+        .ok_or_else(|| "WebKit 生成标注截图失败：没有返回图像".to_string())?;
+    let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::dictionary();
+    let tiff_data = image
+        .TIFFRepresentation()
+        .ok_or_else(|| "WebKit 生成标注截图失败：无法读取图像数据".to_string())?;
+    let bitmap_rep = NSBitmapImageRep::imageRepWithData(&tiff_data)
+        .ok_or_else(|| "WebKit 生成标注截图失败：无法读取 bitmap 图像".to_string())?;
+    let data = bitmap_rep
+        .representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+        .ok_or_else(|| "WebKit 生成标注截图失败：无法编码 PNG".to_string())?;
+    let bytes = data.to_vec();
+    if bytes.is_empty() {
+        return Err("WebKit 生成标注截图失败：PNG 数据为空".to_string());
+    }
+    Ok(bytes)
 }
 
 #[cfg(target_os = "macos")]
@@ -1643,6 +1764,7 @@ pub fn run() {
             read_annotation_archive,
             copy_annotation_archive_prompt,
             capture_annotation_screenshot,
+            capture_annotation_webview_snapshot,
             copy_svg_to_clipboard,
             copy_image_to_clipboard,
             take_pending_open_files

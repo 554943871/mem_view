@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.35
+
+- Changed annotation visual evidence capture on macOS to use WKWebView snapshots instead of screen capture, avoiding Screen Recording permission prompts and privacy-redacted desktop screenshots.
+
 ## v0.2.34
 
 - Changed annotation completion to archive the current annotation bundle in app data, with restore and prompt-copy actions available from the reader header.

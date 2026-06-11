@@ -3,7 +3,6 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
   import MarkdownIt from "markdown-it";
@@ -118,6 +117,7 @@
     screenshotPath: string | null;
     capturePadding: number;
     captureRect: AnnotationCaptureRect | null;
+    captureMethod?: string | null;
     captureStatus: AnnotationCaptureStatus;
     captureError: string | null;
   };
@@ -4129,21 +4129,13 @@
     }
 
     try {
-      const [webviewPosition, scaleFactor] = await Promise.all([
-        getCurrentWebview().position(),
-        getCurrentWindow().scaleFactor()
-      ]);
       const originalScrollTop = readerElement.scrollTop;
       const originalScrollLeft = readerElement.scrollLeft;
       try {
         for (const annotation of annotations) {
           await scrollAnnotationIntoCaptureView(annotation.rect);
-          const captureRect = getAnnotationScreenCaptureRect(
-            annotation.rect,
-            webviewPosition.x,
-            webviewPosition.y,
-            scaleFactor
-          );
+          await waitForAnnotationSnapshotReady();
+          const captureRect = getAnnotationWebviewCaptureRect(annotation.rect);
           evidenceById.set(
             annotation.id,
             captureRect
@@ -4172,13 +4164,14 @@
     captureRect: AnnotationCaptureRect
   ): Promise<AnnotationVisualEvidence> {
     try {
-      const screenshotPath = await invoke<string>("capture_annotation_screenshot", {
+      const screenshotPath = await invoke<string>("capture_annotation_webview_snapshot", {
         captureRect
       });
       return {
         screenshotPath,
         capturePadding: ANNOTATION_CAPTURE_PADDING,
         captureRect,
+        captureMethod: "wk-webview-snapshot",
         captureStatus: "captured",
         captureError: null
       };
@@ -4187,6 +4180,7 @@
         screenshotPath: null,
         capturePadding: ANNOTATION_CAPTURE_PADDING,
         captureRect,
+        captureMethod: "wk-webview-snapshot",
         captureStatus: "unavailable",
         captureError: `生成截图失败：${getErrorMessage(err)}`
       };
@@ -4203,6 +4197,43 @@
     readerElement.scrollLeft = target.left;
     await nextAnimationFrame();
     await nextAnimationFrame();
+  }
+
+  async function waitForAnnotationSnapshotReady() {
+    const frameDocument = getHtmlFrameDocument();
+    await Promise.race([
+      Promise.all([
+        waitForDocumentFontsReady(document),
+        frameDocument ? waitForDocumentFontsReady(frameDocument) : Promise.resolve(),
+        readerElement ? waitForImagesReady(readerElement) : Promise.resolve(),
+        frameDocument?.body ? waitForImagesReady(frameDocument.body) : Promise.resolve()
+      ]),
+      timeout(1200)
+    ]);
+    await nextAnimationFrame();
+  }
+
+  function waitForDocumentFontsReady(targetDocument: globalThis.Document) {
+    return targetDocument.fonts?.ready.then(() => undefined).catch(() => undefined) ?? Promise.resolve();
+  }
+
+  function waitForImagesReady(root: ParentNode) {
+    const pendingImages = Array.from(root.querySelectorAll<HTMLImageElement>("img")).filter(
+      (image) => !image.complete
+    );
+    if (!pendingImages.length) {
+      return Promise.resolve();
+    }
+
+    return Promise.all(
+      pendingImages.map((image) => image.decode().catch(() => undefined))
+    ).then(() => undefined);
+  }
+
+  function timeout(ms: number) {
+    return new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
   }
 
   function getAnnotationCaptureScrollPosition(rect: AnnotationRect) {
@@ -4230,17 +4261,13 @@
       screenshotPath: null,
       capturePadding: ANNOTATION_CAPTURE_PADDING,
       captureRect: null,
+      captureMethod: null,
       captureStatus: "unavailable",
       captureError: message
     };
   }
 
-  function getAnnotationScreenCaptureRect(
-    rect: AnnotationRect,
-    webviewX: number,
-    webviewY: number,
-    scaleFactor: number
-  ): AnnotationCaptureRect | null {
+  function getAnnotationWebviewCaptureRect(rect: AnnotationRect): AnnotationCaptureRect | null {
     if (!readerElement) {
       return null;
     }
@@ -4264,10 +4291,10 @@
     }
 
     return {
-      x: Math.round(webviewX + clipLeft * scaleFactor),
-      y: Math.round(webviewY + clipTop * scaleFactor),
-      width: Math.max(1, Math.round(width * scaleFactor)),
-      height: Math.max(1, Math.round(height * scaleFactor))
+      x: Math.round(clipLeft),
+      y: Math.round(clipTop),
+      width: Math.max(1, Math.round(width)),
+      height: Math.max(1, Math.round(height))
     };
   }
 
