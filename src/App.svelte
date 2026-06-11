@@ -387,6 +387,7 @@
   const recentRepoLimit = 8;
   const repoViewStateLimit = 24;
   const annotationDraftDocumentLimit = 80;
+  const annotationArchiveDisplayLimit = 8;
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
@@ -978,6 +979,7 @@
   $: currentDocumentArchives = currentDocumentKey
     ? annotationArchives.filter((archive) => normalizePathname(archive.documentPath) === currentDocumentKey)
     : annotationArchives;
+  $: visibleCurrentDocumentArchives = currentDocumentArchives.slice(0, annotationArchiveDisplayLimit);
   $: currentDocumentArchiveCount = currentDocumentKey
     ? currentDocumentArchives.length
     : annotationArchives.length;
@@ -6194,7 +6196,7 @@
           <div class="annotation-archives-empty">{t.annotationArchivesLoading}</div>
         {:else if currentDocumentArchives.length}
           <div class="annotation-archive-list">
-            {#each currentDocumentArchives as archive (archive.archiveId)}
+            {#each visibleCurrentDocumentArchives as archive (archive.archiveId)}
               <article class="annotation-archive-item">
                 <div class="annotation-archive-main">
                   <div class="annotation-archive-title">

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.37
+
+- Limited the annotation archive dialog to show only the latest 8 archive entries for the current document.
+
 ## v0.2.36
 
 - Fixed annotation draft persistence so in-progress annotations are restored after restarting the app.
