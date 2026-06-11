@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.36
+
+- Fixed annotation draft persistence so in-progress annotations are restored after restarting the app.
+- Kept annotation drafts isolated per document path and cleared them after successful annotation export.
+
 ## v0.2.35
 
 - Changed annotation visual evidence capture on macOS to use WKWebView snapshots instead of screen capture, avoiding Screen Recording permission prompts and privacy-redacted desktop screenshots.

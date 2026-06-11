@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "memView",
-  "version": "0.2.35",
+  "version": "0.2.36",
   "identifier": "io.github.user554943871.memview",
   "build": {
     "beforeDevCommand": "npm run dev:web",

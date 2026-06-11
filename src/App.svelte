@@ -156,6 +156,16 @@
     startY: number;
     rect: AnnotationRect;
   };
+  type PersistedAnnotationDraftDocument = {
+    path: string;
+    updatedAtUnixMs: number;
+    annotations: AnnotationItem[];
+  };
+  type PersistedAnnotationDraftStore = {
+    schemaVersion: string;
+    updatedAtUnixMs: number;
+    documents: PersistedAnnotationDraftDocument[];
+  };
   type AnnotationExportPayload = {
     schemaVersion: string;
     createdAtUnixMs: number;
@@ -370,10 +380,13 @@
   const repoPathStorageKey = "memView.repoPath";
   const recentRepoPathsStorageKey = "memView.recentRepoPaths";
   const repoViewStatesStorageKey = "memView.repoViewStates";
+  const annotationDraftsStorageKey = "memView.annotationDrafts";
+  const activeAnnotationDocumentStorageKey = "memView.activeAnnotationDocument";
   const repoViewId = "repo";
   const fileViewPrefix = "file:";
   const recentRepoLimit = 8;
   const repoViewStateLimit = 24;
+  const annotationDraftDocumentLimit = 80;
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
@@ -915,7 +928,8 @@
   let annotationMode = false;
   let annotationDraft: AnnotationDraft | null = null;
   let annotationPointerId: number | null = null;
-  let annotationsByPath = new Map<string, AnnotationItem[]>();
+  let annotationsByPath = getInitialAnnotationDrafts();
+  let activeAnnotationDocumentKey = getInitialActiveAnnotationDocumentKey();
   let editingAnnotationId = "";
   let annotationNoteDrag: AnnotationNoteDrag | null = null;
   let annotationExporting = false;
@@ -1018,6 +1032,8 @@
 
   function handleBeforeUnload() {
     saveCurrentRepoViewState();
+    persistAnnotationDrafts();
+    persistActiveAnnotationDocumentKey();
   }
 
   async function setupDragDrop() {
@@ -1141,6 +1157,247 @@
     } catch {
       return [];
     }
+  }
+
+  function getInitialAnnotationDrafts() {
+    const drafts = new Map<string, AnnotationItem[]>();
+    if (typeof localStorage === "undefined") {
+      return drafts;
+    }
+
+    try {
+      const parsed = JSON.parse(localStorage.getItem(annotationDraftsStorageKey) ?? "null");
+      const documents = getPersistedAnnotationDraftDocuments(parsed);
+      for (const document of documents) {
+        const path = normalizePathname(document.path);
+        if (path && document.annotations.length) {
+          drafts.set(path, document.annotations);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load annotation drafts", err);
+    }
+
+    return drafts;
+  }
+
+  function getPersistedAnnotationDraftDocuments(value: unknown): PersistedAnnotationDraftDocument[] {
+    const rawDocuments = Array.isArray(value)
+      ? value
+      : isRecord(value) && Array.isArray(value.documents)
+        ? value.documents
+        : [];
+    const documents: PersistedAnnotationDraftDocument[] = [];
+
+    for (const rawDocument of rawDocuments) {
+      if (!isRecord(rawDocument) || typeof rawDocument.path !== "string") {
+        continue;
+      }
+
+      const path = normalizePathname(rawDocument.path);
+      const rawAnnotations = Array.isArray(rawDocument.annotations) ? rawDocument.annotations : [];
+      const annotations = rawAnnotations
+        .map((annotation) => parsePersistedAnnotationItem(annotation, path))
+        .filter((annotation): annotation is AnnotationItem => Boolean(annotation));
+      if (!path || !annotations.length) {
+        continue;
+      }
+
+      documents.push({
+        path,
+        updatedAtUnixMs: parseFiniteNumber(rawDocument.updatedAtUnixMs, 0),
+        annotations
+      });
+    }
+
+    return documents;
+  }
+
+  function parsePersistedAnnotationItem(value: unknown, fallbackPath: string): AnnotationItem | null {
+    if (!isRecord(value) || typeof value.id !== "string") {
+      return null;
+    }
+
+    const rect = parsePersistedAnnotationRect(value.rect);
+    const document = parsePersistedAnnotationDocumentMeta(value.document, fallbackPath);
+    if (!rect || !document) {
+      return null;
+    }
+
+    const coveredNodes = Array.isArray(value.coveredNodes)
+      ? value.coveredNodes
+          .map(parsePersistedAnnotationCoveredNode)
+          .filter((node): node is AnnotationCoveredNode => Boolean(node))
+      : [];
+
+    return {
+      id: value.id,
+      note: typeof value.note === "string" ? value.note : "",
+      rect,
+      notePosition: parsePersistedAnnotationNotePosition(value.notePosition),
+      noteCollapsed: value.noteCollapsed === true,
+      coveredNodes,
+      document
+    };
+  }
+
+  function parsePersistedAnnotationRect(value: unknown): AnnotationRect | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+
+    const left = parseFiniteNumber(value.left, Number.NaN);
+    const top = parseFiniteNumber(value.top, Number.NaN);
+    const width = parseFiniteNumber(value.width, Number.NaN);
+    const height = parseFiniteNumber(value.height, Number.NaN);
+    if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+      return null;
+    }
+
+    return {
+      left,
+      top,
+      width,
+      height,
+      scrollTop: parseFiniteNumber(value.scrollTop, 0),
+      scrollLeft: parseFiniteNumber(value.scrollLeft, 0),
+      readerWidth: parseFiniteNumber(value.readerWidth, 0),
+      readerHeight: parseFiniteNumber(value.readerHeight, 0)
+    };
+  }
+
+  function parsePersistedAnnotationDocumentMeta(
+    value: unknown,
+    fallbackPath: string
+  ): AnnotationDocumentMeta | null {
+    const record = isRecord(value) ? value : {};
+    const path = typeof record.path === "string" ? normalizePathname(record.path) : fallbackPath;
+    if (!path) {
+      return null;
+    }
+
+    return {
+      path,
+      relativePath: typeof record.relativePath === "string" ? record.relativePath : "",
+      repoPath: typeof record.repoPath === "string" ? normalizePathname(record.repoPath) : null,
+      title: typeof record.title === "string" ? record.title : repoName(path),
+      kind: typeof record.kind === "string" ? record.kind : "document"
+    };
+  }
+
+  function parsePersistedAnnotationNotePosition(value: unknown): AnnotationNotePosition | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+
+    const left = parseFiniteNumber(value.left, Number.NaN);
+    const top = parseFiniteNumber(value.top, Number.NaN);
+    return Number.isFinite(left) && Number.isFinite(top) ? { left, top } : null;
+  }
+
+  function parsePersistedAnnotationCoveredNode(value: unknown): AnnotationCoveredNode | null {
+    if (!isRecord(value) || typeof value.nodeId !== "string" || typeof value.type !== "string") {
+      return null;
+    }
+
+    return {
+      nodeId: value.nodeId,
+      type: value.type,
+      sourceLines: parsePersistedAnnotationSourceLines(value.sourceLines),
+      headingPath: Array.isArray(value.headingPath)
+        ? value.headingPath.filter((heading): heading is string => typeof heading === "string")
+        : [],
+      textExcerpt: typeof value.textExcerpt === "string" ? value.textExcerpt : "",
+      intersectionRatio: parseFiniteNumber(value.intersectionRatio, 0),
+      isPrimary: value.isPrimary === true
+    };
+  }
+
+  function parsePersistedAnnotationSourceLines(value: unknown): AnnotationSourceLines | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+
+    const start = parseFiniteNumber(value.start, Number.NaN);
+    const end = parseFiniteNumber(value.end, Number.NaN);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) {
+      return null;
+    }
+
+    return { start, end };
+  }
+
+  function getInitialActiveAnnotationDocumentKey() {
+    if (typeof localStorage === "undefined") {
+      return "";
+    }
+
+    return normalizePathname(localStorage.getItem(activeAnnotationDocumentStorageKey) ?? "");
+  }
+
+  function persistAnnotationDrafts() {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
+
+    const now = Date.now();
+    const documents = Array.from(annotationsByPath.entries())
+      .slice(-annotationDraftDocumentLimit)
+      .map(([path, annotations]) => ({
+        path,
+        updatedAtUnixMs: now,
+        annotations: annotations.map((annotation) => ({
+          ...annotation,
+          notePosition: annotation.notePosition ?? null,
+          noteCollapsed: annotation.noteCollapsed ?? false
+        }))
+      }))
+      .filter((document) => document.annotations.length);
+
+    try {
+      if (!documents.length) {
+        localStorage.removeItem(annotationDraftsStorageKey);
+        return;
+      }
+
+      const store: PersistedAnnotationDraftStore = {
+        schemaVersion: "memView.annotationDrafts.v1",
+        updatedAtUnixMs: now,
+        documents
+      };
+      localStorage.setItem(annotationDraftsStorageKey, JSON.stringify(store));
+    } catch (err) {
+      console.warn("Failed to persist annotation drafts", err);
+    }
+  }
+
+  function persistActiveAnnotationDocumentKey() {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
+
+    const documentKey = current ? normalizePathname(current.path) : "";
+    activeAnnotationDocumentKey = annotationMode && documentKey ? documentKey : "";
+    if (activeAnnotationDocumentKey) {
+      localStorage.setItem(activeAnnotationDocumentStorageKey, activeAnnotationDocumentKey);
+    } else {
+      localStorage.removeItem(activeAnnotationDocumentStorageKey);
+    }
+  }
+
+  function restoreAnnotationModeForDocument(document: Document) {
+    const documentKey = normalizePathname(document.path);
+    if (activeAnnotationDocumentKey && activeAnnotationDocumentKey === documentKey) {
+      annotationMode = true;
+    }
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
+  function parseFiniteNumber(value: unknown, fallback: number) {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   }
 
   function uniqueRepoPaths(paths: string[]) {
@@ -1440,6 +1697,7 @@
 
     current = view.type === "repo" ? repoCurrent : fileDocuments.get(view.id) ?? null;
     if (current) {
+      restoreAnnotationModeForDocument(current);
       renderDocumentContent(current);
     } else {
       clearRenderedDocument();
@@ -1832,6 +2090,7 @@
     try {
       repoCurrent = await invoke<Document>("read_document", { repoPath, path });
       current = repoCurrent;
+      restoreAnnotationModeForDocument(repoCurrent);
       renderDocumentContent(repoCurrent);
       status = "ready";
       await completeRenderedDocumentUpdate();
@@ -1875,6 +2134,7 @@
       upsertOpenView(view);
       activeViewId = view.id;
       current = doc;
+      restoreAnnotationModeForDocument(doc);
       renderDocumentContent(doc);
       status = "ready";
       await completeRenderedDocumentUpdate();
@@ -3565,6 +3825,7 @@
     if (!annotationMode) {
       editingAnnotationId = "";
     }
+    persistActiveAnnotationDocumentKey();
   }
 
   function handleReaderPointerDown(event: PointerEvent) {
@@ -3715,12 +3976,12 @@
 
   function setAnnotationsForPath(path: string, items: AnnotationItem[]) {
     const next = new Map(annotationsByPath);
+    next.delete(path);
     if (items.length) {
       next.set(path, items);
-    } else {
-      next.delete(path);
     }
     annotationsByPath = next;
+    persistAnnotationDrafts();
   }
 
   async function refreshAnnotationArchives(options: { notifyError?: boolean } = {}) {
@@ -3774,6 +4035,7 @@
       editingAnnotationId = restored[0]?.id ?? "";
       annotationArchivesOpen = false;
       await openRestoredAnnotationDocument(document);
+      persistActiveAnnotationDocumentKey();
       if (editingAnnotationId) {
         void focusEditingAnnotationNote(editingAnnotationId);
       }
@@ -4058,6 +4320,7 @@
       }
       annotationMode = false;
       editingAnnotationId = "";
+      persistActiveAnnotationDocumentKey();
       if (!result.promptCopied) {
         showUpdateToast(
           `${t.annotationArchivedCopyFailed}: ${result.promptCopyError ?? result.readmePath}`,
