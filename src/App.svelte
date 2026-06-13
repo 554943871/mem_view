@@ -67,6 +67,14 @@
   type FlatNode = TreeNode & { depth: number };
   type DocHeading = { id: string; title: string; level: number };
   type SvgBox = { x: number; y: number; width: number; height: number };
+  type SvgTextStyle = {
+    fontFamily: string;
+    fontSize: number;
+    fontStyle: string;
+    fontWeight: string;
+    letterSpacing: number;
+    lineHeight: number;
+  };
   type MarkdownRenderEnv = {
     headingCounts: Map<string, number>;
     nodeCounts: Map<string, number>;
@@ -905,6 +913,7 @@
   let zoomedDiagramTitle = "";
   let zoomLevel = 1;
   let diagramViewport: HTMLDivElement | null = null;
+  let svgTextMeasureCanvas: HTMLCanvasElement | null = null;
   let copyDiagramState: CopyDiagramState = "idle";
   let copyDiagramErrorMessage = "";
   let copyDiagramResetTimer: number | null = null;
@@ -5214,6 +5223,10 @@
       "marker-mid",
       "marker-start",
       "opacity",
+      "padding-left",
+      "padding-right",
+      "padding-top",
+      "padding-bottom",
       "paint-order",
       "stroke",
       "stroke-dasharray",
@@ -5249,30 +5262,35 @@
 
   function replaceSvgForeignObjectsWithText(svg: SVGSVGElement) {
     svg.querySelectorAll<SVGForeignObjectElement>("foreignObject").forEach((foreignObject) => {
-      const lines = getForeignObjectTextLines(foreignObject);
+      const width = parseFloat(foreignObject.getAttribute("width") ?? "") || 0;
+      const height = parseFloat(foreignObject.getAttribute("height") ?? "") || 0;
+      const labelElement = foreignObject.querySelector<HTMLElement>(".nodeLabel, p, div, span");
+      const wrapWidth = getForeignObjectTextWrapWidth(width, labelElement);
+      const baseTextStyle = getForeignObjectTextStyle(labelElement);
+      const lines = getForeignObjectTextLines(foreignObject, wrapWidth, baseTextStyle);
       if (!lines.length) {
         return;
       }
 
-      const width = parseFloat(foreignObject.getAttribute("width") ?? "") || 0;
-      const height = parseFloat(foreignObject.getAttribute("height") ?? "") || 0;
-      const labelElement = foreignObject.querySelector<HTMLElement>(".nodeLabel, p, div, span");
-      const fontSize = parseFloat(labelElement?.style.getPropertyValue("font-size") ?? "") || 16;
-      const lineHeight = Math.max(fontSize * 1.35, fontSize + 4);
+      const textStyle = fitSvgTextStyleToForeignObjectHeight(baseTextStyle, lines.length, height);
       const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
       text.setAttribute("x", String(width / 2));
-      text.setAttribute("y", String(height / 2 - ((lines.length - 1) * lineHeight) / 2));
+      text.setAttribute("y", String(height / 2 - ((lines.length - 1) * textStyle.lineHeight) / 2));
       text.setAttribute("text-anchor", "middle");
       text.setAttribute("dominant-baseline", "middle");
-      text.setAttribute("font-family", labelElement?.style.getPropertyValue("font-family") || "sans-serif");
-      text.setAttribute("font-size", String(fontSize));
-      text.setAttribute("font-weight", labelElement?.style.getPropertyValue("font-weight") || "400");
+      text.setAttribute("font-family", textStyle.fontFamily);
+      text.setAttribute("font-size", String(textStyle.fontSize));
+      text.setAttribute("font-style", textStyle.fontStyle);
+      text.setAttribute("font-weight", textStyle.fontWeight);
       text.setAttribute("fill", labelElement?.style.getPropertyValue("color") || "#000000");
+      if (textStyle.letterSpacing) {
+        text.setAttribute("letter-spacing", String(textStyle.letterSpacing));
+      }
 
       lines.forEach((line, index) => {
         const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
         tspan.setAttribute("x", String(width / 2));
-        tspan.setAttribute("dy", index === 0 ? "0" : String(lineHeight));
+        tspan.setAttribute("dy", index === 0 ? "0" : String(textStyle.lineHeight));
         tspan.textContent = line;
         text.appendChild(tspan);
       });
@@ -5281,7 +5299,11 @@
     });
   }
 
-  function getForeignObjectTextLines(foreignObject: SVGForeignObjectElement) {
+  function getForeignObjectTextLines(
+    foreignObject: SVGForeignObjectElement,
+    wrapWidth: number,
+    textStyle: SvgTextStyle
+  ) {
     const lines: string[] = [];
     let currentLine = "";
     const flushLine = () => {
@@ -5317,7 +5339,185 @@
 
     foreignObject.childNodes.forEach((child) => visit(child));
     flushLine();
-    return lines;
+    return lines.flatMap((line) => wrapSvgTextLine(line, wrapWidth, textStyle));
+  }
+
+  function getForeignObjectTextWrapWidth(width: number, labelElement: HTMLElement | null) {
+    if (width <= 0) {
+      return 0;
+    }
+
+    const paddingLeft = parseSvgLength(labelElement?.style.getPropertyValue("padding-left") ?? "");
+    const paddingRight = parseSvgLength(labelElement?.style.getPropertyValue("padding-right") ?? "");
+    const fallbackInlineInset = 12;
+    return Math.max(18, width - paddingLeft - paddingRight - fallbackInlineInset);
+  }
+
+  function getForeignObjectTextStyle(labelElement: HTMLElement | null): SvgTextStyle {
+    const fontSize = parseSvgLength(labelElement?.style.getPropertyValue("font-size") ?? "") || 16;
+    const lineHeight = parseSvgLineHeight(labelElement?.style.getPropertyValue("line-height") ?? "", fontSize);
+    return {
+      fontFamily: labelElement?.style.getPropertyValue("font-family") || "sans-serif",
+      fontSize,
+      fontStyle: labelElement?.style.getPropertyValue("font-style") || "normal",
+      fontWeight: labelElement?.style.getPropertyValue("font-weight") || "400",
+      letterSpacing: parseSvgLength(labelElement?.style.getPropertyValue("letter-spacing") ?? ""),
+      lineHeight: Math.max(lineHeight, fontSize * 1.2, fontSize + 2)
+    };
+  }
+
+  function fitSvgTextStyleToForeignObjectHeight(
+    textStyle: SvgTextStyle,
+    lineCount: number,
+    height: number
+  ): SvgTextStyle {
+    if (height <= 0 || lineCount <= 1) {
+      return textStyle;
+    }
+
+    const textHeight = lineCount * textStyle.lineHeight;
+    const maxTextHeight = height * 0.86;
+    if (textHeight <= maxTextHeight) {
+      return textStyle;
+    }
+
+    const scale = Math.max(0.68, maxTextHeight / textHeight);
+    return {
+      ...textStyle,
+      fontSize: Number(Math.max(10, textStyle.fontSize * scale).toFixed(2)),
+      lineHeight: Number(Math.max(12, textStyle.lineHeight * scale).toFixed(2))
+    };
+  }
+
+  function parseSvgLineHeight(value: string, fontSize: number) {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === "normal") {
+      return 0;
+    }
+
+    if (trimmed.endsWith("%")) {
+      const percentage = parseFloat(trimmed);
+      return Number.isFinite(percentage) ? fontSize * percentage / 100 : 0;
+    }
+
+    const parsed = parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+
+    return /^[0-9.]+$/.test(trimmed) && parsed < 4 ? parsed * fontSize : parsed;
+  }
+
+  function parseSvgLength(value: string) {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function wrapSvgTextLine(line: string, maxWidth: number, textStyle: SvgTextStyle) {
+    const normalized = line.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return [];
+    }
+    if (maxWidth <= 0 || measureSvgText(normalized, textStyle) <= maxWidth) {
+      return [normalized];
+    }
+
+    const wrapped: string[] = [];
+    const flushCurrent = (value: string) => {
+      const trimmed = value.trim();
+      if (trimmed) {
+        wrapped.push(trimmed);
+      }
+    };
+    let currentLine = "";
+    let pendingSpace = "";
+
+    for (const token of tokenizeSvgTextLine(normalized)) {
+      if (/^\s+$/.test(token)) {
+        if (currentLine) {
+          pendingSpace = " ";
+        }
+        continue;
+      }
+
+      const separator = currentLine && pendingSpace ? pendingSpace : "";
+      const candidate = `${currentLine}${separator}${token}`;
+      if (!currentLine) {
+        if (measureSvgText(token, textStyle) <= maxWidth) {
+          currentLine = token;
+          pendingSpace = "";
+          continue;
+        }
+
+        const chunks = breakSvgTextToken(token, maxWidth, textStyle);
+        chunks.slice(0, -1).forEach(flushCurrent);
+        currentLine = chunks.at(-1) ?? "";
+        pendingSpace = "";
+        continue;
+      }
+
+      if (measureSvgText(candidate, textStyle) <= maxWidth) {
+        currentLine = candidate;
+        pendingSpace = "";
+        continue;
+      }
+
+      flushCurrent(currentLine);
+      currentLine = "";
+      pendingSpace = "";
+
+      if (measureSvgText(token, textStyle) <= maxWidth) {
+        currentLine = token;
+        continue;
+      }
+
+      const chunks = breakSvgTextToken(token, maxWidth, textStyle);
+      chunks.slice(0, -1).forEach(flushCurrent);
+      currentLine = chunks.at(-1) ?? "";
+    }
+
+    flushCurrent(currentLine);
+    return wrapped;
+  }
+
+  function tokenizeSvgTextLine(line: string) {
+    return line.match(/\s+|[A-Za-z0-9]+(?:[-_:/.\[\]()#][A-Za-z0-9]+)*|[\u3400-\u9fff\uf900-\ufaff]|[^\s]/gu) ?? [line];
+  }
+
+  function breakSvgTextToken(token: string, maxWidth: number, textStyle: SvgTextStyle) {
+    const chunks: string[] = [];
+    let currentChunk = "";
+    for (const character of Array.from(token)) {
+      const candidate = `${currentChunk}${character}`;
+      if (!currentChunk || measureSvgText(candidate, textStyle) <= maxWidth) {
+        currentChunk = candidate;
+        continue;
+      }
+
+      chunks.push(currentChunk);
+      currentChunk = character;
+    }
+
+    if (currentChunk) {
+      chunks.push(currentChunk);
+    }
+    return chunks;
+  }
+
+  function measureSvgText(text: string, textStyle: SvgTextStyle) {
+    svgTextMeasureCanvas ??= document.createElement("canvas");
+    const canvas = svgTextMeasureCanvas;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return text.length * textStyle.fontSize;
+    }
+
+    context.font = `${textStyle.fontStyle} ${textStyle.fontWeight} ${textStyle.fontSize}px ${textStyle.fontFamily}`;
+    const baseWidth = context.measureText(text).width;
+    const letterSpacingWidth = textStyle.letterSpacing
+      ? Math.max(0, Array.from(text).length - 1) * textStyle.letterSpacing
+      : 0;
+    return baseWidth + letterSpacingWidth;
   }
 
   function addSvgWhiteBackground(svg: SVGSVGElement, size: SvgBox | { width: number; height: number }) {

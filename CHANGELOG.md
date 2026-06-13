@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.38
+
+- Fixed enlarged Mermaid diagrams so HTML-label node text is rewrapped inside the node boxes instead of overflowing after zoom.
+
 ## v0.2.37
 
 - Limited the annotation archive dialog to show only the latest 8 archive entries for the current document.
