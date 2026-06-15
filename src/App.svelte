@@ -2,6 +2,7 @@
   import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
@@ -342,6 +343,7 @@
     copyDocumentPath: string;
     copiedDocumentPath: string;
     copyDocumentPathFailed: string;
+    openExternalLinkFailed: string;
     findDocument: string;
     findPlaceholder: string;
     findPrevious: string;
@@ -481,6 +483,7 @@
       copyDocumentPath: "复制完整路径",
       copiedDocumentPath: "完整路径已复制",
       copyDocumentPathFailed: "路径复制失败",
+      openExternalLinkFailed: "外部链接打开失败",
       findDocument: "查找当前文档",
       findPlaceholder: "查找当前文档",
       findPrevious: "上一个匹配",
@@ -635,6 +638,7 @@
       copyDocumentPath: "Copy full path",
       copiedDocumentPath: "Full path copied",
       copyDocumentPathFailed: "Path copy failed",
+      openExternalLinkFailed: "Failed to open external link",
       findDocument: "Find in document",
       findPlaceholder: "Find in current document",
       findPrevious: "Previous match",
@@ -3222,6 +3226,12 @@
       return true;
     }
 
+    if (isExternalBrowserHref(href)) {
+      event.preventDefault();
+      await openExternalBrowserLink(href);
+      return true;
+    }
+
     const target = resolveLinkedDocument(href);
     if (!target) {
       return false;
@@ -3307,6 +3317,12 @@
       return;
     }
 
+    if (isExternalBrowserHref(href)) {
+      event.preventDefault();
+      await openExternalBrowserLink(href);
+      return;
+    }
+
     const resolved = resolveLinkedDocument(href);
     if (!resolved) {
       return;
@@ -3371,6 +3387,28 @@
 
   function isExternalHref(pathPart: string) {
     return /^[a-z][a-z0-9+.-]*:/i.test(pathPart) && !pathPart.toLowerCase().startsWith("file:");
+  }
+
+  function isExternalBrowserHref(href: string) {
+    return /^https?:\/\//i.test(href.trim());
+  }
+
+  async function openExternalBrowserLink(href: string) {
+    const url = href.trim();
+    try {
+      if (isTauri()) {
+        await openUrl(url);
+        return;
+      }
+
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        throw new Error("Browser blocked the popup");
+      }
+    } catch (err) {
+      console.warn("Open external link failed", err);
+      showUpdateToast(`${t.openExternalLinkFailed}: ${getErrorMessage(err)}`, "error");
+    }
   }
 
   function resolveMarkdownImageSrc(src: string | null, env: MarkdownRenderEnv) {

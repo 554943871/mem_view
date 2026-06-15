@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.39
+
+- Changed external `http://` and `https://` document links to open in the system default browser instead of navigating inside memView.
+
 ## v0.2.38
 
 - Fixed enlarged Mermaid diagrams so HTML-label node text is rewrapped inside the node boxes instead of overflowing after zoom.
