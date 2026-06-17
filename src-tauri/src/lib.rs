@@ -37,6 +37,7 @@ struct RepoCounts {
     documents: usize,
     markdown: usize,
     html: usize,
+    assets: usize,
     mermaid: usize,
     requirements: usize,
 }
@@ -59,6 +60,7 @@ struct TreeNode {
     title: String,
     path: Option<String>,
     kind: String,
+    content_type: Option<String>,
     children: Vec<TreeNode>,
 }
 
@@ -262,9 +264,13 @@ fn scan_repo(repo_path: String) -> Result<RepoSnapshot, String> {
     docs.sort_by(|a, b| sort_key(&a.relative_path).cmp(&sort_key(&b.relative_path)));
 
     let counts = RepoCounts {
-        documents: docs.len(),
+        documents: docs
+            .iter()
+            .filter(|doc| is_renderable_document_content_type(&doc.content_type))
+            .count(),
         markdown: docs.iter().filter(|doc| doc.content_type == "markdown").count(),
         html: docs.iter().filter(|doc| doc.content_type == "html").count(),
+        assets: docs.iter().filter(|doc| doc.content_type == "asset").count(),
         mermaid: docs.iter().filter(|doc| doc.has_mermaid).count(),
         requirements: count_requirements(&root),
     };
@@ -1332,26 +1338,35 @@ fn scan_documents(root: &Path) -> Result<Vec<DocMeta>, String> {
     {
         let entry = entry.map_err(|err| format!("扫描文件失败：{}", err))?;
         let path = entry.path();
-        let Some(content_type) = document_content_type(path) else {
-            continue;
-        };
         if !entry.file_type().is_file() {
             continue;
         }
+        let Some(content_type) = indexed_file_content_type(path) else {
+            continue;
+        };
 
         let relative_path = path
             .strip_prefix(root)
             .map_err(|_| "路径解析失败".to_string())?
             .to_string_lossy()
             .to_string();
-        let content = fs::read_to_string(path).unwrap_or_default();
-        let title = extract_document_title(&content, content_type).unwrap_or_else(|| fallback_title(path));
+        let is_renderable = is_renderable_document_content_type(content_type);
+        let content = if is_renderable {
+            fs::read_to_string(path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let title = if is_renderable {
+            extract_document_title(&content, content_type).unwrap_or_else(|| fallback_title(path))
+        } else {
+            file_name_title(path)
+        };
 
         docs.push(DocMeta {
             id: relative_path.clone(),
             title,
             path: path.to_string_lossy().to_string(),
-            kind: classify_doc(&relative_path),
+            kind: classify_indexed_file(&relative_path, content_type),
             content_type: content_type.to_string(),
             modified_at_unix_ms: file_modified_unix_ms(path),
             relative_path,
@@ -1391,6 +1406,7 @@ struct MutableNode {
     title: String,
     kind: String,
     path: Option<String>,
+    content_type: Option<String>,
     children: BTreeMap<String, MutableNode>,
 }
 
@@ -1401,6 +1417,7 @@ impl MutableNode {
             title: title.to_string(),
             kind: kind.to_string(),
             path,
+            content_type: None,
             children: BTreeMap::new(),
         }
     }
@@ -1416,7 +1433,14 @@ impl MutableNode {
         if parts.len() == 1 {
             self.children.insert(
                 sort_key(&doc.relative_path),
-                MutableNode::new(&doc.id, &tree_doc_title(doc), &doc.kind, Some(doc.path.clone())),
+                MutableNode {
+                    id: doc.id.clone(),
+                    title: tree_doc_title(doc),
+                    kind: doc.kind.clone(),
+                    path: Some(doc.path.clone()),
+                    content_type: Some(doc.content_type.clone()),
+                    children: BTreeMap::new(),
+                },
             );
             return;
         }
@@ -1439,6 +1463,7 @@ impl MutableNode {
             title: self.title,
             path: self.path,
             kind: self.kind,
+            content_type: self.content_type,
             children: self
                 .children
                 .into_values()
@@ -1613,6 +1638,30 @@ fn document_content_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn indexed_file_content_type(path: &Path) -> Option<&'static str> {
+    document_content_type(path).or_else(|| asset_content_type(path))
+}
+
+fn asset_content_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "csv" | "tsv"
+        | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tif" | "tiff"
+        | "heic" | "psd" | "ai" | "sketch" | "fig" | "xd" | "zip" | "rar" | "7z" | "mp4"
+        | "mov" | "m4v" | "mp3" | "wav" => Some("asset"),
+        _ => None,
+    }
+}
+
+fn is_renderable_document_content_type(content_type: &str) -> bool {
+    matches!(content_type, "markdown" | "html")
+}
+
 fn file_modified_unix_ms(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -1705,6 +1754,21 @@ fn fallback_title(path: &Path) -> String {
         .replace('-', " ")
 }
 
+fn file_name_title(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| fallback_title(path))
+}
+
+fn classify_indexed_file(relative_path: &str, content_type: &str) -> String {
+    if content_type == "asset" {
+        return "asset".to_string();
+    }
+
+    classify_doc(relative_path)
+}
+
 fn classify_doc(relative_path: &str) -> String {
     if relative_path == "README.md" {
         "repo".to_string()
@@ -1794,6 +1858,7 @@ mod tests {
         assert_eq!(snapshot.counts.documents, 6);
         assert_eq!(snapshot.counts.markdown, 4);
         assert_eq!(snapshot.counts.html, 2);
+        assert_eq!(snapshot.counts.assets, 0);
         assert_eq!(snapshot.counts.mermaid, 1);
         assert!(snapshot
             .docs
@@ -1833,6 +1898,42 @@ mod tests {
 
         assert_eq!(snapshot.root_path, root.to_string_lossy().to_string());
         assert!(snapshot.docs.iter().any(|doc| doc.relative_path == "README.md"));
+    }
+
+    #[test]
+    fn scans_source_material_attachments_as_assets() {
+        let root = build_test_repo();
+        let attachment_dir = root.join(
+            "requirements/mvp/raw-sources/_attachments/source-materials/小程序开发-2026-05-10",
+        );
+        fs::create_dir_all(&attachment_dir).expect("attachment directory should create");
+        fs::write(attachment_dir.join("C001.xlsx"), b"sheet")
+            .expect("spreadsheet asset should write");
+        fs::write(attachment_dir.join("详情页上传.png"), b"png")
+            .expect("image asset should write");
+        fs::write(attachment_dir.join("网站设计.psd"), b"psd")
+            .expect("design asset should write");
+
+        let snapshot =
+            scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
+
+        assert_eq!(snapshot.counts.documents, 6);
+        assert_eq!(snapshot.counts.assets, 3);
+        assert!(snapshot.docs.iter().any(|doc| {
+            doc.relative_path
+                == "requirements/mvp/raw-sources/_attachments/source-materials/小程序开发-2026-05-10/C001.xlsx"
+                && doc.content_type == "asset"
+                && doc.kind == "asset"
+                && doc.title == "C001.xlsx"
+        }));
+        assert_eq!(
+            find_tree_node(
+                &snapshot.tree,
+                "requirements/mvp/raw-sources/_attachments/source-materials/小程序开发-2026-05-10/C001.xlsx",
+            )
+            .and_then(|node| node.content_type.as_deref()),
+            Some("asset")
+        );
     }
 
     #[test]

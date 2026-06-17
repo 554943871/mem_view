@@ -2,7 +2,7 @@
   import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { openPath, openUrl } from "@tauri-apps/plugin-opener";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
@@ -10,15 +10,17 @@
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
 
+  type DocumentContentType = "markdown" | "html";
+  type IndexedContentType = DocumentContentType | "asset";
+
   type TreeNode = {
     id: string;
     title: string;
     path: string | null;
     kind: string;
+    content_type: IndexedContentType | null;
     children: TreeNode[];
   };
-
-  type DocumentContentType = "markdown" | "html";
 
   type DocMeta = {
     id: string;
@@ -26,7 +28,7 @@
     path: string;
     relative_path: string;
     kind: string;
-    content_type: DocumentContentType;
+    content_type: IndexedContentType;
     modified_at_unix_ms: number;
     has_mermaid: boolean;
   };
@@ -39,6 +41,7 @@
       documents: number;
       markdown: number;
       html: number;
+      assets: number;
       mermaid: number;
       requirements: number;
     };
@@ -250,7 +253,7 @@
     repoPath: string;
     scrollTop: number;
   };
-  type LinkTarget = { type: ViewType; path: string; anchor: string };
+  type LinkTarget = { type: ViewType | "asset"; path: string; anchor: string };
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "syncing" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
@@ -261,6 +264,7 @@
   type ToastTone = "info" | "error";
   type MessagePack = {
     docs: string;
+    assets: string;
     diagrams: string;
     refresh: string;
     memoryRepo: string;
@@ -344,6 +348,7 @@
     copiedDocumentPath: string;
     copyDocumentPathFailed: string;
     openExternalLinkFailed: string;
+    openAssetFailed: string;
     findDocument: string;
     findPlaceholder: string;
     findPrevious: string;
@@ -401,6 +406,7 @@
   const messages: Record<Locale, MessagePack> = {
     "zh-CN": {
       docs: "文档",
+      assets: "附件",
       diagrams: "图",
       refresh: "拉取并刷新",
       memoryRepo: "记忆库",
@@ -484,6 +490,7 @@
       copiedDocumentPath: "完整路径已复制",
       copyDocumentPathFailed: "路径复制失败",
       openExternalLinkFailed: "外部链接打开失败",
+      openAssetFailed: "附件打开失败",
       findDocument: "查找当前文档",
       findPlaceholder: "查找当前文档",
       findPrevious: "上一个匹配",
@@ -536,6 +543,7 @@
         mission: "任务组",
         task: "任务",
         document: "文档",
+        asset: "附件",
         document_file: "文档文件",
         markdown_file: "Markdown 文件",
         html_file: "HTML 文件",
@@ -556,6 +564,7 @@
     },
     en: {
       docs: "docs",
+      assets: "assets",
       diagrams: "diagrams",
       refresh: "Pull & Refresh",
       memoryRepo: "Memory Repo",
@@ -639,6 +648,7 @@
       copiedDocumentPath: "Full path copied",
       copyDocumentPathFailed: "Path copy failed",
       openExternalLinkFailed: "Failed to open external link",
+      openAssetFailed: "Failed to open asset",
       findDocument: "Find in document",
       findPlaceholder: "Find in current document",
       findPrevious: "Previous match",
@@ -691,6 +701,7 @@
         mission: "mission",
         task: "task",
         document: "document",
+        asset: "asset",
         document_file: "Document file",
         markdown_file: "Markdown file",
         html_file: "HTML file",
@@ -1129,6 +1140,10 @@
 
   function isDocumentPath(path: string) {
     return /\.(md|html?)$/i.test(path.trim());
+  }
+
+  function isRenderableEntry(entry: DocMeta | null | undefined) {
+    return entry?.content_type === "markdown" || entry?.content_type === "html";
   }
 
   function getInitialLocale(): Locale {
@@ -2044,15 +2059,15 @@
       rememberRepoPath(snapshot.root_path);
       status = "ready";
       const preservedEntry = preservedRelativePath
-        ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath)
+        ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath && isRenderableEntry(doc))
         : null;
       const restoredEntry = restoredState?.currentRelativePath
-        ? snapshot.docs.find((doc) => doc.relative_path === restoredState.currentRelativePath)
+        ? snapshot.docs.find((doc) => doc.relative_path === restoredState.currentRelativePath && isRenderableEntry(doc))
         : null;
       const entry = preservedEntry ?? restoredEntry ??
-        snapshot.docs.find((doc) => doc.relative_path === "README.md") ??
-        snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md") ??
-        snapshot.docs[0];
+        snapshot.docs.find((doc) => doc.relative_path === "README.md" && isRenderableEntry(doc)) ??
+        snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md" && isRenderableEntry(doc)) ??
+        snapshot.docs.find(isRenderableEntry);
       if (entry) {
         await openDocument(entry.path, {
           restoreScrollTop: preservedEntry
@@ -2061,6 +2076,10 @@
               ? restoredState?.scrollTop
               : undefined
         });
+      } else {
+        repoCurrent = null;
+        current = null;
+        clearRenderedDocument();
       }
     } catch (err) {
       if (previousSnapshot) {
@@ -2087,6 +2106,17 @@
 
   function getReaderScrollTop() {
     return document.querySelector<HTMLElement>(".reader")?.scrollTop ?? 0;
+  }
+
+  async function openRepoEntry(path: string, contentType: IndexedContentType | null = null) {
+    const entry = findRepoEntryByPath(path);
+    const resolvedContentType = contentType ?? entry?.content_type ?? null;
+    if (resolvedContentType === "asset") {
+      await openAssetPath(entry?.path ?? path);
+      return;
+    }
+
+    await openDocument(entry?.path ?? path);
   }
 
   async function openDocument(path: string, options: OpenDocumentOptions = {}) {
@@ -2120,6 +2150,32 @@
     } catch (err) {
       error = String(err);
       status = "error";
+    }
+  }
+
+  function findRepoEntryByPath(path: string) {
+    if (!snapshot) {
+      return null;
+    }
+
+    const normalized = normalizePathname(path);
+    return snapshot.docs.find((doc) => normalizePathname(doc.path) === normalized) ?? null;
+  }
+
+  async function openAssetPath(path: string) {
+    try {
+      if (isTauri()) {
+        await openPath(path);
+        return;
+      }
+
+      const opened = window.open(path, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        throw new Error("Browser blocked the popup");
+      }
+    } catch (err) {
+      console.warn("Open asset failed", err);
+      showUpdateToast(`${t.openAssetFailed}: ${getErrorMessage(err)}`, "error");
     }
   }
 
@@ -2961,6 +3017,7 @@
         title: doc.title,
         path: doc.path,
         kind: doc.kind,
+        content_type: doc.content_type,
         children: []
       }));
   }
@@ -2996,7 +3053,7 @@
 
   function handleNodeClick(node: FlatNode) {
     if (node.path) {
-      void openDocument(node.path);
+      void openRepoEntry(node.path, node.content_type);
       return;
     }
 
@@ -3329,6 +3386,11 @@
     }
 
     event.preventDefault();
+    if (resolved.type === "asset") {
+      await openAssetPath(resolved.path);
+      return;
+    }
+
     if (resolved.type === "file") {
       await openStandaloneDocument(resolved.path, resolved.anchor);
       return;
@@ -3352,7 +3414,12 @@
 
     if (activeView?.type === "file") {
       const path = resolveStandaloneFilePath(pathPart);
-      return path ? { type: "file", path, anchor } : null;
+      if (!path) {
+        return null;
+      }
+      return isDocumentPath(path)
+        ? { type: "file", path, anchor }
+        : { type: "asset", path, anchor: "" };
     }
 
     if (!snapshot) {
@@ -3365,7 +3432,13 @@
     }
 
     const doc = findDocByLinkPath(normalizedPath);
-    return doc ? { type: "repo", path: doc.path, anchor } : null;
+    if (!doc) {
+      return null;
+    }
+
+    return doc.content_type === "asset"
+      ? { type: "asset", path: doc.path, anchor: "" }
+      : { type: "repo", path: doc.path, anchor };
   }
 
   function splitHref(href: string) {
@@ -5888,7 +5961,13 @@
     <div class="brand">
       <div>
         <h1>{repoName(repoPath) || t.memoryRepo}</h1>
-        <p>{snapshot?.counts.documents ?? snapshot?.counts.markdown ?? 0} {t.docs} · {snapshot?.counts.mermaid ?? 0} {t.diagrams}</p>
+        <p>
+          {snapshot?.counts.documents ?? snapshot?.counts.markdown ?? 0} {t.docs}
+          {#if snapshot?.counts.assets}
+            · {snapshot.counts.assets} {t.assets}
+          {/if}
+          · {snapshot?.counts.mermaid ?? 0} {t.diagrams}
+        </p>
       </div>
     </div>
 

@@ -13,11 +13,11 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.2.39](https://github.com/554943871/mem_view/releases/tag/v0.2.39)
+[下载 memView v0.2.40](https://github.com/554943871/mem_view/releases/tag/v0.2.40)
 
 直接下载 dmg：
 
-[memView_0.2.39_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.39/memView_0.2.39_arm64.dmg)
+[memView_0.2.40_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.40/memView_0.2.40_arm64.dmg)
 
 ## 重要：macOS Gatekeeper 提示
 
@@ -28,8 +28,8 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 下载的 Release 资产时继续。可以先对 dmg 移除 quarantine 标记：
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.39_arm64.dmg
-open /path/to/memView_0.2.39_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.40_arm64.dmg
+open /path/to/memView_0.2.40_arm64.dmg
 ```
 
 如果已经把应用复制到了 Applications 或其他目录，也可以对 app bundle 移除 quarantine：
@@ -45,7 +45,7 @@ xattr -dr com.apple.quarantine /path/to/memView.app
 - 拉取并刷新按钮会先执行 `git pull --ff-only`，再重新索引文件。
 - 首次启动选择本地记忆库目录。
 - 后续启动自动打开上次选择的记忆库。
-- 扫描记忆库并展示文件树。
+- 扫描记忆库，并在文件树中展示文档和源材料附件。
 - 渲染 Markdown 内容和 Mermaid 图。
 - 展示文件信息和简单阅读链。
 - 支持按标题、路径、类型搜索。

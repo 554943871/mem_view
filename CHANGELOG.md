@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.40
+
+- Added repository indexing for common source-material attachments such as images, PDFs, Office files, design files, and archives so attachment folders appear in the file tree and search.
+- Changed attachment clicks to open the file with the system default application instead of trying to render it as a memView document.
+
 ## v0.2.39
 
 - Changed external `http://` and `https://` document links to open in the system default browser instead of navigating inside memView.

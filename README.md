@@ -14,11 +14,11 @@ folder to open. The selected folder is saved locally and reopened next time.
 
 The latest packaged macOS build is available from GitHub Releases:
 
-[Download memView v0.2.39](https://github.com/554943871/mem_view/releases/tag/v0.2.39)
+[Download memView v0.2.40](https://github.com/554943871/mem_view/releases/tag/v0.2.40)
 
 Direct dmg asset:
 
-[memView_0.2.39_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.39/memView_0.2.39_arm64.dmg)
+[memView_0.2.40_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.40/memView_0.2.40_arm64.dmg)
 
 ## Important: macOS Gatekeeper Notice
 
@@ -31,8 +31,8 @@ check it for malicious software, only proceed if you trust this repository and
 the downloaded release asset. You can remove the quarantine flag from the dmg:
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.39_arm64.dmg
-open /path/to/memView_0.2.39_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.40_arm64.dmg
+open /path/to/memView_0.2.40_arm64.dmg
 ```
 
 If you already copied the app into Applications or another folder, remove
@@ -49,7 +49,7 @@ xattr -dr com.apple.quarantine /path/to/memView.app
 - The Pull & Refresh button runs `git pull --ff-only` before re-indexing files.
 - Choose a local memory repository folder on first launch.
 - Reopen the last selected memory repository on later launches.
-- Scans the memory repo and shows a file tree.
+- Scans the memory repo and shows documents plus source-material attachments in a file tree.
 - Renders Markdown content with Mermaid diagrams.
 - Shows file metadata and a simple read chain panel.
 - Search by document title, path, and kind.
