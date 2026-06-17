@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.41
+
+- Fixed attachment opening by adding scoped local path access for the Tauri opener permission.
+
 ## v0.2.40
 
 - Added repository indexing for common source-material attachments such as images, PDFs, Office files, design files, and archives so attachment folders appear in the file tree and search.
