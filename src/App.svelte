@@ -257,6 +257,10 @@
   type Locale = "zh-CN" | "en";
   type StatusKey = "idle" | "loading" | "syncing" | "indexing" | "ready" | "opening" | "error";
   type UpdateState = "idle" | "checking" | "downloading" | "installing";
+  type NodeIcon = {
+    title: string;
+    className: string;
+  };
   type CheckUpdateOptions = {
     notifyNoUpdate?: boolean;
     notifyError?: boolean;
@@ -1623,6 +1627,65 @@
 
   function displayNodeTitle(node: TreeNode) {
     return node.path ? node.title : t.folderTitles[node.title] ?? node.title;
+  }
+
+  function nodeIcon(node: TreeNode): NodeIcon {
+    if (!node.path) {
+      return { title: formatKind("folder"), className: "folder-icon" };
+    }
+    if (node.content_type === "markdown") {
+      return { title: t.kinds.markdown_file, className: "file-icon markdown-icon" };
+    }
+    if (node.content_type === "html") {
+      return { title: t.kinds.html_file, className: "file-icon html-icon" };
+    }
+
+    return assetNodeIcon(fileExtension(node.path) || fileExtension(node.title));
+  }
+
+  function nodeIconClass(icon: NodeIcon) {
+    return `node-type-icon ${icon.className}`;
+  }
+
+  function fileExtension(path: string | null | undefined) {
+    const name = (path ?? "").split(/[\\/]/).pop() ?? "";
+    const dotIndex = name.lastIndexOf(".");
+    if (dotIndex <= 0 || dotIndex === name.length - 1) {
+      return "";
+    }
+    return name.slice(dotIndex + 1).toLowerCase();
+  }
+
+  function assetNodeIcon(extension: string): NodeIcon {
+    if (extension === "pdf") {
+      return { title: "PDF", className: "file-icon pdf-icon" };
+    }
+    if (["doc", "docx"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon word-icon" };
+    }
+    if (["xls", "xlsx", "csv", "tsv"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon sheet-icon" };
+    }
+    if (["ppt", "pptx"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon slide-icon" };
+    }
+    if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tif", "tiff", "heic"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon image-icon" };
+    }
+    if (["psd", "ai", "sketch", "fig", "xd"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon design-icon" };
+    }
+    if (["zip", "rar", "7z"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon archive-icon" };
+    }
+    if (["mp4", "mov", "m4v"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon video-icon" };
+    }
+    if (["mp3", "wav"].includes(extension)) {
+      return { title: extension.toUpperCase(), className: "file-icon audio-icon" };
+    }
+
+    return { title: extension ? extension.toUpperCase() : formatKind("asset"), className: "file-icon generic-icon" };
   }
 
   function repoName(path: string) {
@@ -6038,6 +6101,7 @@
     <nav class="tree" aria-label={t.memoryFiles}>
       {#if visibleNodes.length}
         {#each visibleNodes as node (node.id)}
+          {@const icon = nodeIcon(node)}
           <button
             class={nodeClass(node, activeRepoDocumentPath)}
             style={`--depth: ${node.depth}`}
@@ -6052,6 +6116,7 @@
             {:else}
               <span class="folder-chevron placeholder" aria-hidden="true"></span>
             {/if}
+            <span class={nodeIconClass(icon)} title={icon.title} aria-hidden="true"></span>
             <span class="node-title">{displayNodeTitle(node)}</span>
             {#if node.path}
               <span class="node-meta">{formatKind(node.kind)}{node.title.endsWith(".md") ? "" : ""}</span>

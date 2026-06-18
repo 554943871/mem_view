@@ -1334,7 +1334,7 @@ fn scan_documents(root: &Path) -> Result<Vec<DocMeta>, String> {
 
     for entry in WalkDir::new(root)
         .into_iter()
-        .filter_entry(|entry| entry.file_name().to_string_lossy() != ".git")
+        .filter_entry(|entry| !is_hidden_directory_entry(entry))
     {
         let entry = entry.map_err(|err| format!("扫描文件失败：{}", err))?;
         let path = entry.path();
@@ -1382,10 +1382,20 @@ fn count_requirements(root: &Path) -> usize {
     match fs::read_dir(requirements) {
         Ok(entries) => entries
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_dir())
+            .filter(|entry| entry.path().is_dir() && !is_dot_prefixed_name(&entry.file_name()))
             .count(),
         Err(_) => 0,
     }
+}
+
+fn is_hidden_directory_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() > 0 && entry.file_type().is_dir() && is_dot_prefixed_name(entry.file_name())
+}
+
+fn is_dot_prefixed_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .map(|value| value.starts_with('.'))
+        .unwrap_or(false)
 }
 
 fn build_tree(docs: &[DocMeta]) -> Vec<TreeNode> {
@@ -1934,6 +1944,41 @@ mod tests {
             .and_then(|node| node.content_type.as_deref()),
             Some("asset")
         );
+    }
+
+    #[test]
+    fn skips_dot_prefixed_directories() {
+        let root = build_test_repo();
+        fs::create_dir_all(root.join(".codex/skills")).expect("hidden codex dir should create");
+        fs::create_dir_all(root.join(".pytest_cache")).expect("hidden pytest dir should create");
+        fs::create_dir_all(root.join(".venv/docs")).expect("hidden venv dir should create");
+        fs::create_dir_all(root.join("docs/.drafts")).expect("nested hidden dir should create");
+        fs::create_dir_all(root.join("requirements/.scratch")).expect("hidden requirement dir should create");
+        fs::write(root.join(".codex/skills/README.md"), "# Hidden Codex\n")
+            .expect("hidden codex doc should write");
+        fs::write(root.join(".pytest_cache/cache.html"), "<h1>Hidden Cache</h1>\n")
+            .expect("hidden pytest doc should write");
+        fs::write(root.join(".venv/docs/runtime.md"), "# Hidden Runtime\n")
+            .expect("hidden venv doc should write");
+        fs::write(root.join("docs/.drafts/idea.md"), "# Hidden Draft\n")
+            .expect("hidden nested doc should write");
+        fs::write(root.join("requirements/.scratch/README.md"), "# Hidden Requirement\n")
+            .expect("hidden requirement doc should write");
+
+        let snapshot =
+            scan_repo(root.to_string_lossy().to_string()).expect("test mem repo should scan");
+
+        assert_eq!(snapshot.counts.documents, 6);
+        assert_eq!(snapshot.counts.requirements, 1);
+        assert!(!snapshot
+            .docs
+            .iter()
+            .any(|doc| doc.relative_path.split('/').any(|part| part.starts_with('.'))));
+        assert!(find_tree_node(&snapshot.tree, ".codex").is_none());
+        assert!(find_tree_node(&snapshot.tree, ".pytest_cache").is_none());
+        assert!(find_tree_node(&snapshot.tree, ".venv").is_none());
+        assert!(find_tree_node(&snapshot.tree, "docs/.drafts").is_none());
+        assert!(find_tree_node(&snapshot.tree, "requirements/.scratch").is_none());
     }
 
     #[test]

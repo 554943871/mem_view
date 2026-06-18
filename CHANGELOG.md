@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.42
+
+- Hid dot-prefixed directories such as `.codex`, `.pytest_cache`, and `.venv` from repository scanning and the file tree.
+- Added distinct file-type icons in the repository tree, including a README-style Markdown icon and grouped icons for common attachment formats.
+
 ## v0.2.41
 
 - Fixed attachment opening by adding scoped local path access for the Tauri opener permission.
