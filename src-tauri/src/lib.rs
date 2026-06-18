@@ -301,6 +301,11 @@ fn pull_repo(repo_path: String) -> Result<GitPullResult, String> {
             root_path: root.to_string_lossy().to_string(),
             message,
         })
+    } else if is_missing_pull_upstream_message(&message) {
+        Ok(GitPullResult {
+            root_path: root.to_string_lossy().to_string(),
+            message: "当前 Git 分支没有 upstream，已跳过 git pull --ff-only。".to_string(),
+        })
     } else {
         let detail = if message.is_empty() {
             output.status.to_string()
@@ -309,6 +314,12 @@ fn pull_repo(repo_path: String) -> Result<GitPullResult, String> {
         };
         Err(format!("git pull --ff-only 执行失败：\n{}", detail))
     }
+}
+
+fn is_missing_pull_upstream_message(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("there is no tracking information for the current branch")
+        || normalized.contains("no upstream configured for branch")
 }
 
 #[tauri::command]
@@ -2005,6 +2016,17 @@ mod tests {
     }
 
     #[test]
+    fn pull_repo_skips_branch_without_tracking_information() {
+        let root = build_git_repo_without_upstream("pull-no-upstream");
+
+        let result = pull_repo(root.to_string_lossy().to_string())
+            .expect("local branch without upstream should not block repository reading");
+
+        assert_eq!(result.root_path, root.to_string_lossy());
+        assert!(result.message.contains("跳过"));
+    }
+
+    #[test]
     fn combines_command_output_without_extra_blank_lines() {
         assert_eq!(
             command_output_text(b"Already up to date.\n", b""),
@@ -2356,6 +2378,30 @@ mod tests {
 
         root.canonicalize()
             .expect("test repo should canonicalize after creation")
+    }
+
+    fn build_git_repo_without_upstream(label: &str) -> PathBuf {
+        let root = build_temp_dir(label);
+        fs::create_dir_all(&root).expect("git test dir should create");
+        run_git_command(&root, &["init", "-q"]);
+        root.canonicalize()
+            .expect("git test repo should canonicalize after init")
+    }
+
+    fn run_git_command(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed:\n{}",
+            args,
+            command_output_text(&output.stdout, &output.stderr)
+        );
     }
 
     fn build_temp_dir(label: &str) -> PathBuf {

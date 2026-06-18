@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.43
+
+- Fixed Pull & Refresh so local Git branches without upstream tracking information skip `git pull --ff-only` and continue reading the repository instead of blocking the reader with an error.
+
 ## v0.2.42
 
 - Hid dot-prefixed directories such as `.codex`, `.pytest_cache`, and `.venv` from repository scanning and the file tree.
