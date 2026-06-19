@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.44
+
+- Added a remove action for memory repositories in Quick switch.
+- Added a confirmation dialog before removing a repository from Quick switch, including the full local path and a clear note that the Git repository is not deleted from disk.
+
 ## v0.2.43
 
 - Fixed Pull & Refresh so local Git branches without upstream tracking information skip `git pull --ff-only` and continue reading the repository instead of blocking the reader with an error.

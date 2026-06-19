@@ -275,6 +275,12 @@
     recentRepos: string;
     noRecentRepos: string;
     chooseNewRepo: string;
+    forgetRecentRepo: string;
+    forgetRecentRepoConfirm: string;
+    forgetRecentRepoPath: string;
+    cancelForgetRecentRepo: string;
+    confirmForgetRecentRepo: string;
+    forgotRecentRepo: string;
     openDocumentFile: string;
     reloadDocumentFile: string;
     lastUpdated: string;
@@ -417,6 +423,12 @@
       recentRepos: "快捷切换",
       noRecentRepos: "暂无最近打开",
       chooseNewRepo: "打开新记忆库",
+      forgetRecentRepo: "从列表移除记忆库",
+      forgetRecentRepoConfirm: "从快捷切换中移除“{name}”？此操作不会删除磁盘上的 Git 仓库。",
+      forgetRecentRepoPath: "记忆库路径",
+      cancelForgetRecentRepo: "取消",
+      confirmForgetRecentRepo: "确认移除",
+      forgotRecentRepo: "已从快捷切换移除",
       openDocumentFile: "打开文档文件",
       reloadDocumentFile: "重新读取文件",
       lastUpdated: "最后更新",
@@ -575,6 +587,12 @@
       recentRepos: "Quick switch",
       noRecentRepos: "No recent repos",
       chooseNewRepo: "Open New Repo",
+      forgetRecentRepo: "Remove repo from list",
+      forgetRecentRepoConfirm: "Remove \"{name}\" from Quick switch? This will not delete the Git repository from disk.",
+      forgetRecentRepoPath: "Repo path",
+      cancelForgetRecentRepo: "Cancel",
+      confirmForgetRecentRepo: "Remove",
+      forgotRecentRepo: "Removed from Quick switch",
       openDocumentFile: "Open Document File",
       reloadDocumentFile: "Reload File",
       lastUpdated: "Updated",
@@ -914,6 +932,7 @@
   let updateToastMessage = "";
   let updateToastTone: ToastTone = "info";
   let updateToastTimer: number | null = null;
+  let pendingForgetRecentRepoPath = "";
   let repoPath = getInitialRepoPath();
   let openViews: OpenView[] = repoPath ? [createRepoView(repoPath)] : [];
   let activeViewId = openViews[0]?.id ?? "";
@@ -1018,6 +1037,12 @@
   $: annotationArchivesButtonLabel = currentDocumentArchiveCount
     ? `${t.annotationArchives} ${currentDocumentArchiveCount}`
     : t.annotationArchives;
+  $: pendingForgetRecentRepoName = pendingForgetRecentRepoPath
+    ? repoName(pendingForgetRecentRepoPath) || pendingForgetRecentRepoPath
+    : "";
+  $: pendingForgetRecentRepoMessage = pendingForgetRecentRepoName
+    ? t.forgetRecentRepoConfirm.replace("{name}", pendingForgetRecentRepoName)
+    : "";
   $: if (
     !repoPath &&
     !snapshot &&
@@ -1451,10 +1476,99 @@
   function rememberRepoPath(path: string) {
     recentRepoPaths = uniqueRepoPaths([path, ...recentRepoPaths]).slice(0, recentRepoLimit);
     selectedRecentRepoPath = path;
+    persistRememberedRepoPaths(path);
+  }
+
+  function persistRememberedRepoPaths(currentRepoPath: string) {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(repoPathStorageKey, path);
-      localStorage.setItem(recentRepoPathsStorageKey, JSON.stringify(recentRepoPaths));
+      const trimmedCurrentRepoPath = currentRepoPath.trim();
+      if (trimmedCurrentRepoPath) {
+        localStorage.setItem(repoPathStorageKey, trimmedCurrentRepoPath);
+      } else {
+        localStorage.removeItem(repoPathStorageKey);
+      }
+
+      if (recentRepoPaths.length) {
+        localStorage.setItem(recentRepoPathsStorageKey, JSON.stringify(recentRepoPaths));
+      } else {
+        localStorage.removeItem(recentRepoPathsStorageKey);
+      }
     }
+  }
+
+  function forgetSelectedRecentRepo() {
+    const targetPath = selectedRecentRepoPath.trim();
+    if (!targetPath || repoBusy) {
+      return;
+    }
+
+    pendingForgetRecentRepoPath = targetPath;
+  }
+
+  function closeForgetRecentRepoDialog() {
+    pendingForgetRecentRepoPath = "";
+  }
+
+  async function confirmForgetRecentRepoDialog() {
+    const targetPath = pendingForgetRecentRepoPath.trim();
+    if (!targetPath || repoBusy) {
+      return;
+    }
+
+    pendingForgetRecentRepoPath = "";
+    await removeRecentRepoPath(targetPath);
+  }
+
+  async function removeRecentRepoPath(targetPath: string) {
+    const removingActiveRepo = isSamePath(repoPath, targetPath);
+    recentRepoPaths = recentRepoPaths.filter((path) => !isSamePath(path, targetPath));
+    selectedRecentRepoPath = recentRepoPaths.find((path) => isSamePath(path, repoPath)) ??
+      recentRepoPaths[0] ??
+      "";
+
+    const nextRepoViewStates = new Map(repoViewStates);
+    nextRepoViewStates.delete(repoViewStateKey(targetPath));
+    repoViewStates = nextRepoViewStates;
+    persistRepoViewStates();
+
+    if (!removingActiveRepo) {
+      persistRememberedRepoPaths(repoPath);
+      showUpdateToast(t.forgotRecentRepo);
+      return;
+    }
+
+    const nextRepoPath = selectedRecentRepoPath;
+    autoLoadingRecentRepoPath = nextRepoPath;
+    persistRememberedRepoPaths(nextRepoPath);
+    await clearCurrentRepoSelection(targetPath);
+    showUpdateToast(t.forgotRecentRepo);
+    if (nextRepoPath) {
+      await loadRepo(nextRepoPath);
+    }
+  }
+
+  async function clearCurrentRepoSelection(removedRepoPath: string) {
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
+
+    repoPath = "";
+    snapshot = null;
+    repoCurrent = null;
+    query = "";
+    collapsedFolderIds = new Set();
+    error = "";
+    openViews = openViews.filter((view) => view.id !== repoViewId);
+    navigationHistory = navigationHistory.filter(
+      (entry) => entry.type !== "repo" || !isSamePath(entry.repoPath, removedRepoPath)
+    );
+    navigationIndex = Math.min(navigationIndex, navigationHistory.length - 1);
+
+    if (activeViewId === repoViewId || !getOpenView(activeViewId)) {
+      activeViewId = openViews[0]?.id ?? "";
+    }
+
+    await renderActiveView();
   }
 
   function getInitialRepoViewStates() {
@@ -5234,6 +5348,11 @@
     }
 
     if (event.key === "Escape") {
+      if (pendingForgetRecentRepoPath) {
+        closeForgetRecentRepoDialog();
+        return;
+      }
+
       if (updateDialogOpen && !updateInstalling) {
         void closeUpdateDialog();
         return;
@@ -6067,6 +6186,22 @@
               <path d="M12 8h.01" />
             </svg>
           </button>
+          <button
+            class="repo-remove"
+            type="button"
+            disabled={repoBusy}
+            aria-label={t.forgetRecentRepo}
+            title={t.forgetRecentRepo}
+            on:click={forgetSelectedRecentRepo}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M19 6l-1 14H6L5 6" />
+              <path d="M10 11v5" />
+              <path d="M14 11v5" />
+            </svg>
+          </button>
         {/if}
       </div>
       <button
@@ -6548,6 +6683,59 @@
         {updateToastTone === "error" ? "!" : ""}
       </span>
       <span>{updateToastMessage}</span>
+    </div>
+  {/if}
+
+  {#if pendingForgetRecentRepoPath}
+    <div class="update-modal" role="dialog" aria-modal="true" aria-label={t.forgetRecentRepo}>
+      <section class="forget-repo-dialog">
+        <div class="update-dialog-head">
+          <div>
+            <div class="eyebrow">{t.recentRepos}</div>
+            <h2>{t.forgetRecentRepo}</h2>
+            <p>{pendingForgetRecentRepoMessage}</p>
+          </div>
+          <button
+            class="ghost icon-button"
+            type="button"
+            disabled={repoBusy}
+            aria-label={t.cancelForgetRecentRepo}
+            title={t.cancelForgetRecentRepo}
+            on:click={closeForgetRecentRepoDialog}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <dl class="forget-repo-meta">
+          <div>
+            <dt>{t.forgetRecentRepoPath}</dt>
+            <dd>{pendingForgetRecentRepoPath}</dd>
+          </div>
+        </dl>
+
+        <div class="update-dialog-actions">
+          <button
+            class="ghost"
+            type="button"
+            disabled={repoBusy}
+            on:click={closeForgetRecentRepoDialog}
+          >
+            {t.cancelForgetRecentRepo}
+          </button>
+          <button
+            class="danger"
+            type="button"
+            disabled={repoBusy}
+            on:click={confirmForgetRecentRepoDialog}
+          >
+            {t.confirmForgetRecentRepo}
+          </button>
+        </div>
+      </section>
     </div>
   {/if}
 

@@ -187,6 +187,26 @@ h1 {
   background: #1f4f46;
 }
 
+.danger {
+  height: 34px;
+  border: 1px solid #8b2424;
+  border-radius: 7px;
+  background: #8b2424;
+  color: #ffffff;
+  font-weight: 680;
+  padding: 0 14px;
+}
+
+.danger:hover {
+  border-color: #711d1d;
+  background: #711d1d;
+}
+
+.danger:disabled:hover {
+  border-color: #8b2424;
+  background: #8b2424;
+}
+
 .icon-button {
   display: grid;
   width: 32px;
@@ -221,12 +241,13 @@ h1 {
 
 .repo-recent-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 7px;
 }
 
-.repo-info {
+.repo-info,
+.repo-remove {
   position: relative;
   display: grid;
   flex: 0 0 auto;
@@ -241,14 +262,35 @@ h1 {
   padding: 0;
 }
 
+.repo-remove {
+  color: #7a3d3d;
+  cursor: pointer;
+}
+
 .repo-info:hover,
-.repo-info:focus-visible {
+.repo-info:focus-visible,
+.repo-remove:hover,
+.repo-remove:focus-visible {
   border-color: #aeb8b3;
   background: #fbfbf9;
   color: #24313d;
 }
 
-.repo-info svg {
+.repo-remove:hover,
+.repo-remove:focus-visible {
+  border-color: #c9aaaa;
+  background: #fff7f7;
+  color: #8b2424;
+}
+
+.repo-remove:disabled:hover {
+  border-color: #d2d2cb;
+  background: #ffffff;
+  color: #7a3d3d;
+}
+
+.repo-info svg,
+.repo-remove svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -1876,6 +1918,17 @@ h1 {
   box-shadow: 0 24px 80px rgba(31, 41, 51, 0.24);
 }
 
+.forget-repo-dialog {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  width: min(520px, calc(100vw - 56px));
+  overflow: hidden;
+  border: 1px solid #d9d9d2;
+  border-radius: 8px;
+  background: #fbfbf9;
+  box-shadow: 0 24px 80px rgba(31, 41, 51, 0.24);
+}
+
 .update-dialog-head {
   display: flex;
   align-items: flex-start;
@@ -1928,6 +1981,29 @@ h1 {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.forget-repo-meta {
+  margin: 0;
+  border-bottom: 1px solid #ecece7;
+  padding: 14px 18px;
+}
+
+.forget-repo-meta dt {
+  color: #69727d;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.forget-repo-meta dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: #17212b;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .update-notes {
