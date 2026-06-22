@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.45
+
+- Renamed the Simplified Chinese Quick switch action from "打开新记忆库" to "打开新仓库" for clearer repository switching.
+
 ## v0.2.44
 
 - Added a remove action for memory repositories in Quick switch.

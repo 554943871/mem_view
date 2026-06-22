@@ -422,7 +422,7 @@
       memoryRepo: "记忆库",
       recentRepos: "快捷切换",
       noRecentRepos: "暂无最近打开",
-      chooseNewRepo: "打开新记忆库",
+      chooseNewRepo: "打开新仓库",
       forgetRecentRepo: "从列表移除记忆库",
       forgetRecentRepoConfirm: "从快捷切换中移除“{name}”？此操作不会删除磁盘上的 Git 仓库。",
       forgetRecentRepoPath: "记忆库路径",

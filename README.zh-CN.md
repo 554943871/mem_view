@@ -13,11 +13,11 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 
 最新 macOS 打包版本已发布在 GitHub Releases：
 
-[下载 memView v0.2.44](https://github.com/554943871/mem_view/releases/tag/v0.2.44)
+[下载 memView v0.2.45](https://github.com/554943871/mem_view/releases/tag/v0.2.45)
 
 直接下载 dmg：
 
-[memView_0.2.44_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.44/memView_0.2.44_arm64.dmg)
+[memView_0.2.45_arm64.dmg](https://github.com/554943871/mem_view/releases/download/v0.2.45/memView_0.2.45_arm64.dmg)
 
 ## 重要：macOS Gatekeeper 提示
 
@@ -28,8 +28,8 @@ memView 不会写死某个记忆库。首次启动时选择一个本地目录即
 下载的 Release 资产时继续。可以先对 dmg 移除 quarantine 标记：
 
 ```bash
-xattr -d com.apple.quarantine /path/to/memView_0.2.44_arm64.dmg
-open /path/to/memView_0.2.44_arm64.dmg
+xattr -d com.apple.quarantine /path/to/memView_0.2.45_arm64.dmg
+open /path/to/memView_0.2.45_arm64.dmg
 ```
 
 如果已经把应用复制到了 Applications 或其他目录，也可以对 app bundle 移除 quarantine：
