@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.48
+
+- Fixed standalone Markdown images so long-pressing or dragging an embedded SVG image does not start the native file-drag interaction.
+
 ## v0.2.47
 
 - Added copy and enlarge controls for standalone Markdown image blocks, including SVG diagrams referenced as Markdown images.

@@ -837,6 +837,7 @@
     }
     token.attrJoin("class", "reader-image");
     token.attrSet("loading", "lazy");
+    token.attrSet("draggable", "false");
 
     return defaultImageRenderer
       ? defaultImageRenderer(tokens, index, options, env, self)
@@ -1087,6 +1088,7 @@
   onMount(() => {
     document.documentElement.lang = locale;
     document.addEventListener("click", handleDocumentClick);
+    document.addEventListener("dragstart", handleDocumentDragStart, true);
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("beforeunload", handleBeforeUnload);
     void setupDragDrop();
@@ -1097,6 +1099,7 @@
 
   onDestroy(() => {
     document.removeEventListener("click", handleDocumentClick);
+    document.removeEventListener("dragstart", handleDocumentDragStart, true);
     window.removeEventListener("resize", handleWindowResize);
     window.removeEventListener("beforeunload", handleBeforeUnload);
     dragDropUnlisten?.();
@@ -2767,6 +2770,11 @@
       return;
     }
 
+    readerElement.querySelectorAll<HTMLImageElement>("img.reader-image").forEach((image) => {
+      image.draggable = false;
+      image.setAttribute("draggable", "false");
+    });
+
     readerElement.querySelectorAll<HTMLImageElement>("p > img.reader-image:only-child").forEach((image) => {
       if (image.parentElement?.classList.contains("reader-image-frame")) {
         return;
@@ -3969,6 +3977,21 @@
     }
 
     await handleHtmlFrameLinkClick(event);
+  }
+
+  function handleDocumentDragStart(event: DragEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const readerImage = target.closest(".reader img.reader-image, .reader .reader-image-frame, .diagram-canvas .zoomed-reader-image");
+    if (!readerImage) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function getHtmlFrameDiagramSvg(button: HTMLButtonElement) {
@@ -6060,7 +6083,7 @@
     const width = size.width ? ` width="${Math.ceil(size.width)}"` : "";
     const height = size.height ? ` height="${Math.ceil(size.height)}"` : "";
 
-    return `<img class="zoomed-reader-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${width}${height}>`;
+    return `<img class="zoomed-reader-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${width}${height} draggable="false">`;
   }
 
   function inlineSvgComputedStyles(source: SVGElement, clone: SVGElement) {

@@ -1431,6 +1431,13 @@ h1 {
   height: auto;
 }
 
+.reader img.reader-image,
+.reader .reader-image-frame,
+.diagram-canvas .zoomed-reader-image {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
 .reader p > img.reader-image:only-child {
   display: block;
   margin: 14px 0;
