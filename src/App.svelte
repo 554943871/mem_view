@@ -2757,8 +2757,41 @@
   }
 
   async function completeMarkdownRenderedDocumentUpdate() {
+    enhanceRenderedImages();
     enhanceRenderedTables();
     await renderMermaid();
+  }
+
+  function enhanceRenderedImages() {
+    if (!readerElement) {
+      return;
+    }
+
+    readerElement.querySelectorAll<HTMLImageElement>("p > img.reader-image:only-child").forEach((image) => {
+      if (image.parentElement?.classList.contains("reader-image-frame")) {
+        return;
+      }
+
+      const frame = document.createElement("span");
+      frame.className = "reader-image-frame";
+      const actions = document.createElement("span");
+      actions.className = "diagram-actions reader-image-actions";
+      actions.appendChild(createReaderImageActionButton("diagram-copy reader-image-copy", t.copyDiagram));
+      actions.appendChild(createReaderImageActionButton("diagram-zoom reader-image-zoom", t.enlargeDiagram));
+
+      image.parentNode?.insertBefore(frame, image);
+      frame.appendChild(actions);
+      frame.appendChild(image);
+    });
+  }
+
+  function createReaderImageActionButton(className: string, label: string) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    return button;
   }
 
   function getMarkdownDocumentHeadings(document: Document): DocHeading[] {
@@ -3632,6 +3665,28 @@
       return;
     }
 
+    const imageCopyButton = target.closest<HTMLButtonElement>(".reader-image-copy");
+    if (imageCopyButton && imageCopyButton.closest(".reader")) {
+      const image = getFrameReaderImage(imageCopyButton);
+      if (!image) {
+        return;
+      }
+
+      await copyInlineImage(image, imageCopyButton);
+      return;
+    }
+
+    const imageZoomButton = target.closest<HTMLButtonElement>(".reader-image-zoom");
+    if (imageZoomButton && imageZoomButton.closest(".reader")) {
+      const image = getFrameReaderImage(imageZoomButton);
+      if (!image) {
+        return;
+      }
+
+      await openZoomedImage(image);
+      return;
+    }
+
     const copyButton = target.closest<HTMLButtonElement>(".diagram-copy");
     if (copyButton && copyButton.closest(".reader")) {
       const svg = getFrameDiagramSvg(copyButton);
@@ -3712,6 +3767,23 @@
   function getFrameDiagramSvg(button: HTMLButtonElement) {
     const frame = button.closest<HTMLElement>(".diagram-frame");
     return frame?.querySelector<SVGSVGElement>(".mermaid svg, .svg-preview-content > svg") ?? null;
+  }
+
+  function getFrameReaderImage(button: HTMLButtonElement) {
+    const frame = button.closest<HTMLElement>(".reader-image-frame");
+    return frame?.querySelector<HTMLImageElement>("img.reader-image") ?? null;
+  }
+
+  async function openZoomedImage(image: HTMLImageElement) {
+    zoomedDiagramHtml = serializeZoomedImage(image);
+    zoomedDiagramTitle = image.alt || current?.title || t.diagram;
+    setCopyDiagramState("idle");
+    resetDiagramView();
+    await tick();
+    if (diagramViewport) {
+      await waitForImagesReady(diagramViewport);
+    }
+    fitDiagramToViewport();
   }
 
   async function copyMermaidFixPrompt(button: HTMLButtonElement) {
@@ -5565,6 +5637,23 @@
     }
   }
 
+  async function copyInlineImage(image: HTMLImageElement, button: HTMLButtonElement) {
+    if (button.disabled) {
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      await copyImageElementToClipboard(image);
+      setInlineDiagramCopyState(button, "copied");
+    } catch (err) {
+      console.warn("Copy image failed", err);
+      setInlineDiagramCopyState(button, "error", getErrorMessage(err));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function setInlineDiagramCopyState(
     button: HTMLButtonElement,
     state: Extract<CopyDiagramState, "copied" | "error">,
@@ -5592,17 +5681,22 @@
     }
 
     const svg = diagramViewport?.querySelector<SVGSVGElement>(".diagram-canvas svg");
-    if (!svg) {
-      setCopyDiagramState("error", "Diagram SVG not found");
+    const image = diagramViewport?.querySelector<HTMLImageElement>(".diagram-canvas img");
+    if (!svg && !image) {
+      setCopyDiagramState("error", "Image not found");
       return;
     }
 
     setCopyDiagramState("copying");
     try {
-      await copyDiagramSvgToClipboard(svg);
+      if (svg) {
+        await copyDiagramSvgToClipboard(svg);
+      } else if (image) {
+        await copyImageElementToClipboard(image);
+      }
       setCopyDiagramState("copied");
     } catch (err) {
-      console.warn("Copy diagram failed", err);
+      console.warn("Copy image failed", err);
       setCopyDiagramState("error", getErrorMessage(err));
     }
   }
@@ -5638,6 +5732,20 @@
         throw new Error(`PNG copy failed: ${getErrorMessage(pngErr)}; SVG fallback failed: ${getErrorMessage(svgErr)}`);
       }
     }
+  }
+
+  async function copyImageElementToClipboard(image: HTMLImageElement) {
+    const raster = await rasterizeImageElement(image);
+    const copiedInBrowser = await copyPngBlobWithBrowserClipboard(raster.pngBlob);
+    if (copiedInBrowser) {
+      return;
+    }
+
+    await invoke<void>("copy_image_to_clipboard", {
+      image: {
+        pngBase64: raster.pngBase64
+      }
+    });
   }
 
   async function rasterizeDiagramSvgMarkup(svgMarkup: string, svg: SVGSVGElement) {
@@ -5699,6 +5807,38 @@
         reject(new Error("Failed to encode diagram image"));
       }, "image/png");
     });
+  }
+
+  async function rasterizeImageElement(image: HTMLImageElement) {
+    if (!image.complete) {
+      await image.decode().catch(() => undefined);
+    }
+
+    const fallbackRect = image.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(image.naturalWidth || fallbackRect.width));
+    const height = Math.max(1, Math.ceil(image.naturalHeight || fallbackRect.height));
+    const maxPixels = 24000000;
+    if (width * height > maxPixels) {
+      throw new Error(`Image is too large to copy: ${width}x${height}`);
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas is not available");
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+    const pngBlob = await canvasToPngBlob(canvas);
+
+    return {
+      width,
+      height,
+      pngBase64: bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer())),
+      pngBlob
+    };
   }
 
   function bytesToBase64(bytes: Uint8Array | Uint8ClampedArray) {
@@ -5810,13 +5950,12 @@
     }
 
     const canvas = diagramViewport.querySelector<HTMLElement>(".diagram-canvas");
-    const svg = canvas?.querySelector<SVGSVGElement>("svg");
-    if (!canvas || !svg) {
+    if (!canvas) {
       return;
     }
 
     const viewportRect = diagramViewport.getBoundingClientRect();
-    const diagramSize = getSvgSize(svg);
+    const diagramSize = getZoomedContentSize(canvas);
     if (!diagramSize.width || !diagramSize.height || !viewportRect.width || !viewportRect.height) {
       return;
     }
@@ -5847,6 +5986,35 @@
     zoomLevel = Number(nextZoom.toFixed(3));
     panX = Math.round((viewportRect.width - canvasWidth * zoomLevel) / 2);
     panY = Math.round((viewportRect.height - canvasHeight * zoomLevel) / 2);
+  }
+
+  function getZoomedContentSize(canvas: HTMLElement) {
+    const svg = canvas.querySelector<SVGSVGElement>("svg");
+    if (svg) {
+      return getSvgSize(svg);
+    }
+
+    const image = canvas.querySelector<HTMLImageElement>("img");
+    if (image) {
+      return getImageElementSize(image);
+    }
+
+    return { width: 0, height: 0 };
+  }
+
+  function getImageElementSize(image: HTMLImageElement) {
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+      return {
+        width: image.naturalWidth,
+        height: image.naturalHeight
+      };
+    }
+
+    const rect = image.getBoundingClientRect();
+    return {
+      width: rect.width / zoomLevel,
+      height: rect.height / zoomLevel
+    };
   }
 
   function handleWindowResize() {
@@ -5883,6 +6051,16 @@
     clone.style.maxWidth = "none";
     clone.style.background = "#ffffff";
     return new XMLSerializer().serializeToString(clone);
+  }
+
+  function serializeZoomedImage(image: HTMLImageElement) {
+    const src = image.currentSrc || image.src || image.getAttribute("src") || "";
+    const alt = image.alt || current?.title || t.diagram;
+    const size = getImageElementSize(image);
+    const width = size.width ? ` width="${Math.ceil(size.width)}"` : "";
+    const height = size.height ? ` height="${Math.ceil(size.height)}"` : "";
+
+    return `<img class="zoomed-reader-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${width}${height}>`;
   }
 
   function inlineSvgComputedStyles(source: SVGElement, clone: SVGElement) {

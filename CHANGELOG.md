@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.47
+
+- Added copy and enlarge controls for standalone Markdown image blocks, including SVG diagrams referenced as Markdown images.
+- Reused the diagram detail viewer for enlarged Markdown images with fit, zoom, pan, and copy-image support.
+
 ## v0.2.46
 
 - Added in-app browsing for local image and SVG files from the repository tree, document links, drag-and-drop, and standalone file opening.

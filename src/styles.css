@@ -1439,6 +1439,23 @@ h1 {
   background: #ffffff;
 }
 
+.reader p > .reader-image-frame:only-child {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 14px 0;
+  line-height: 0;
+}
+
+.reader .reader-image-frame > img.reader-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #deded8;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
 .reader pre {
   overflow: auto;
   border: 1px solid #deded8;
@@ -1552,6 +1569,7 @@ h1 {
 }
 
 .reader .diagram-frame:hover .diagram-actions,
+.reader .reader-image-frame:hover .diagram-actions,
 .reader .diagram-actions:focus-within {
   opacity: 1;
 }
@@ -2297,6 +2315,13 @@ h1 {
 }
 
 .diagram-canvas svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  background: #ffffff;
+}
+
+.diagram-canvas .zoomed-reader-image {
   display: block;
   max-width: none;
   height: auto;
