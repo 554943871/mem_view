@@ -10,8 +10,8 @@
   import mermaid from "mermaid";
   import { onDestroy, onMount, tick } from "svelte";
 
-  type DocumentContentType = "markdown" | "html";
-  type IndexedContentType = DocumentContentType | "asset";
+  type DocumentContentType = "markdown" | "html" | "image";
+  type IndexedContentType = Exclude<DocumentContentType, "image"> | "asset";
 
   type TreeNode = {
     id: string;
@@ -97,6 +97,7 @@
   };
   type ViewType = "repo" | "file";
   type CopyDiagramState = "idle" | "copying" | "copied" | "error";
+  type SvgPreviewStatus = "idle" | "loading" | "ready" | "error";
   const ANNOTATION_CAPTURE_PADDING = 24;
   type AnnotationSourceLines = { start: number; end: number };
   type AnnotationRect = {
@@ -358,7 +359,9 @@
     copiedDocumentPath: string;
     copyDocumentPathFailed: string;
     openExternalLinkFailed: string;
+    openExternalFile: string;
     openAssetFailed: string;
+    imageLoadFailed: string;
     findDocument: string;
     findPlaceholder: string;
     findPrevious: string;
@@ -409,6 +412,7 @@
   const activeAnnotationDocumentStorageKey = "memView.activeAnnotationDocument";
   const repoViewId = "repo";
   const fileViewPrefix = "file:";
+  const previewableImageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
   const recentRepoLimit = 8;
   const repoViewStateLimit = 24;
   const annotationDraftDocumentLimit = 80;
@@ -429,7 +433,7 @@
       cancelForgetRecentRepo: "取消",
       confirmForgetRecentRepo: "确认移除",
       forgotRecentRepo: "已从快捷切换移除",
-      openDocumentFile: "打开文档文件",
+      openDocumentFile: "打开文件",
       reloadDocumentFile: "重新读取文件",
       lastUpdated: "最后更新",
       checkUpdate: "检查更新",
@@ -450,12 +454,12 @@
       installUpdate: "安装更新",
       updateProgress: "更新进度",
       closeUpdateDialog: "关闭更新弹窗",
-      dropDocumentFile: "松开以打开文档文件",
-      dropUnsupported: "请拖入 .md、.html 或 .htm 文件",
+      dropDocumentFile: "松开以打开文件",
+      dropUnsupported: "请拖入 .md、.html、图片或 .svg 文件",
       closeView: "关闭视图",
       openViews: "打开的视图",
       chooseRepoTitle: "选择记忆库目录",
-      chooseFileTitle: "打开文档文件",
+      chooseFileTitle: "打开文档或图片",
       noRepoTitle: "选择一个本地记忆库",
       noRepoBody: "请选择一个 Git 记忆库目录；如果选到仓库内的子目录，memView 会自动打开该 Git 仓库根目录。",
       noRepoSelected: "未选择记忆库",
@@ -506,7 +510,9 @@
       copiedDocumentPath: "完整路径已复制",
       copyDocumentPathFailed: "路径复制失败",
       openExternalLinkFailed: "外部链接打开失败",
+      openExternalFile: "用外部应用打开",
       openAssetFailed: "附件打开失败",
+      imageLoadFailed: "图片加载失败",
       findDocument: "查找当前文档",
       findPlaceholder: "查找当前文档",
       findPrevious: "上一个匹配",
@@ -563,6 +569,7 @@
         document_file: "文档文件",
         markdown_file: "Markdown 文件",
         html_file: "HTML 文件",
+        image_file: "图片文件",
         folder: "目录"
       },
       chainLabels: {
@@ -593,7 +600,7 @@
       cancelForgetRecentRepo: "Cancel",
       confirmForgetRecentRepo: "Remove",
       forgotRecentRepo: "Removed from Quick switch",
-      openDocumentFile: "Open Document File",
+      openDocumentFile: "Open File",
       reloadDocumentFile: "Reload File",
       lastUpdated: "Updated",
       checkUpdate: "Check for Updates",
@@ -614,12 +621,12 @@
       installUpdate: "Install update",
       updateProgress: "Update progress",
       closeUpdateDialog: "Close update dialog",
-      dropDocumentFile: "Drop to open document file",
-      dropUnsupported: "Drop .md, .html, or .htm files only",
+      dropDocumentFile: "Drop to open file",
+      dropUnsupported: "Drop .md, .html, image, or .svg files only",
       closeView: "Close view",
       openViews: "Open views",
       chooseRepoTitle: "Choose Memory Repo",
-      chooseFileTitle: "Open Document File",
+      chooseFileTitle: "Open document or image",
       noRepoTitle: "Choose a local memory repo",
       noRepoBody: "Choose a Git memory repo folder. If you choose a child folder, memView opens the Git repository root.",
       noRepoSelected: "No repo selected",
@@ -670,7 +677,9 @@
       copiedDocumentPath: "Full path copied",
       copyDocumentPathFailed: "Path copy failed",
       openExternalLinkFailed: "Failed to open external link",
+      openExternalFile: "Open externally",
       openAssetFailed: "Failed to open asset",
+      imageLoadFailed: "Image failed to load",
       findDocument: "Find in document",
       findPlaceholder: "Find in current document",
       findPrevious: "Previous match",
@@ -727,6 +736,7 @@
         document_file: "Document file",
         markdown_file: "Markdown file",
         html_file: "HTML file",
+        image_file: "Image file",
         folder: "folder"
       },
       chainLabels: {
@@ -900,6 +910,17 @@
       highlightFindMatches: highlightHtmlReaderMatches,
       setActiveFindMatch: setActiveHtmlFindMatch,
       findAnchor: findHtmlReaderAnchor
+    },
+    image: {
+      id: "image",
+      render: renderImageDocument,
+      afterRender: completeImageRenderedDocumentUpdate,
+      getHeadings: getImageDocumentHeadings,
+      getCoveredNodes: getImageCoveredNodes,
+      clearFindHighlights: clearImageFindHighlights,
+      highlightFindMatches: highlightImageReaderMatches,
+      setActiveFindMatch: setActiveImageFindMatch,
+      findAnchor: findImageReaderAnchor
     }
   };
 
@@ -907,6 +928,11 @@
   let current: Document | null = null;
   let repoCurrent: Document | null = null;
   let renderedHtml = "";
+  let imagePreviewSrc = "";
+  let imageLoadFailed = false;
+  let svgPreviewHtml = "";
+  let svgPreviewStatus: SvgPreviewStatus = "idle";
+  let svgPreviewError = "";
   let localAssetCacheVersion = Date.now();
   let activeRendererId: DocumentContentType | "" = "";
   let htmlFrameSrcdoc = "";
@@ -1010,6 +1036,8 @@
       ? htmlDocHeadings
       : getDocumentRenderer(current).getHeadings(current)
     : [];
+  $: canAnnotateCurrent = Boolean(current && isAnnotatableDocument(current));
+  $: canFindCurrent = Boolean(current && isFindableDocument(current));
   $: headerKind = current ? getDocumentDisplayKind(current, activeViewIsFile) : "repo";
   $: headerTitle = current?.title ?? (repoPath ? t.status[status] : t.noRepoTitle);
   $: headerPath = activeViewIsFile
@@ -1147,23 +1175,23 @@
   }
 
   async function openSystemDocumentFiles(paths: string[]) {
-    const documentPaths = paths.filter(isDocumentPath);
-    for (const path of documentPaths) {
-      await openStandaloneDocument(path);
+    const openablePaths = paths.filter(isOpenableFilePath);
+    for (const path of openablePaths) {
+      await openStandaloneFile(path);
     }
-    return documentPaths.length > 0;
+    return openablePaths.length > 0;
   }
 
   async function openDroppedDocumentFiles(paths: string[]) {
-    const documentPaths = paths.filter(isDocumentPath);
-    if (!documentPaths.length) {
+    const openablePaths = paths.filter(isOpenableFilePath);
+    if (!openablePaths.length) {
       error = t.dropUnsupported;
       status = "error";
       return;
     }
 
-    for (const path of documentPaths) {
-      await openStandaloneDocument(path);
+    for (const path of openablePaths) {
+      await openStandaloneFile(path);
     }
   }
 
@@ -1171,8 +1199,41 @@
     return /\.(md|html?)$/i.test(path.trim());
   }
 
+  function isOpenableFilePath(path: string) {
+    return isDocumentPath(path) || isPreviewableImagePath(path);
+  }
+
+  function isPreviewableImagePath(path: string | null | undefined) {
+    const extension = fileExtension(path);
+    return previewableImageExtensions.includes(extension);
+  }
+
+  function isSvgPath(path: string | null | undefined) {
+    return fileExtension(path) === "svg";
+  }
+
+  function isSvgDocument(document: Document | null | undefined) {
+    return document?.content_type === "image" && isSvgPath(document.path);
+  }
+
   function isRenderableEntry(entry: DocMeta | null | undefined) {
     return entry?.content_type === "markdown" || entry?.content_type === "html";
+  }
+
+  function isPreviewableImageEntry(entry: DocMeta | null | undefined) {
+    return entry?.content_type === "asset" && isPreviewableImagePath(entry.path || entry.relative_path);
+  }
+
+  function isInAppOpenableEntry(entry: DocMeta | null | undefined) {
+    return isRenderableEntry(entry) || isPreviewableImageEntry(entry);
+  }
+
+  function isAnnotatableDocument(document: Document) {
+    return document.content_type === "markdown" || document.content_type === "html";
+  }
+
+  function isFindableDocument(document: Document) {
+    return document.content_type === "markdown" || document.content_type === "html";
   }
 
   function getInitialLocale(): Locale {
@@ -1446,8 +1507,15 @@
 
   function restoreAnnotationModeForDocument(document: Document) {
     const documentKey = normalizePathname(document.path);
-    if (activeAnnotationDocumentKey && activeAnnotationDocumentKey === documentKey) {
-      annotationMode = true;
+    annotationMode = Boolean(
+      isAnnotatableDocument(document) &&
+      activeAnnotationDocumentKey &&
+      activeAnnotationDocumentKey === documentKey
+    );
+    if (!annotationMode) {
+      editingAnnotationId = "";
+      annotationDraft = null;
+      annotationPointerId = null;
     }
   }
 
@@ -1728,7 +1796,13 @@
     if (!isFileView) {
       return document.kind;
     }
-    return document.content_type === "html" ? "html_file" : "markdown_file";
+    if (document.content_type === "html") {
+      return "html_file";
+    }
+    if (document.content_type === "image") {
+      return "image_file";
+    }
+    return "markdown_file";
   }
 
   function getDocumentRenderer(document: Document) {
@@ -1823,6 +1897,41 @@
       title: doc.title || repoName(doc.path),
       path: doc.path
     };
+  }
+
+  function createImageDocumentFromEntry(entry: DocMeta): Document {
+    return {
+      id: entry.id,
+      title: entry.title || fileNameFromPath(entry.path),
+      path: entry.path,
+      relative_path: entry.relative_path,
+      kind: "image_file",
+      content: "",
+      content_type: "image",
+      modified_at_unix_ms: entry.modified_at_unix_ms,
+      has_mermaid: false,
+      read_chain: []
+    };
+  }
+
+  function createStandaloneImageDocument(path: string): Document {
+    const title = fileNameFromPath(path) || "image";
+    return {
+      id: normalizePathname(path),
+      title,
+      path,
+      relative_path: title,
+      kind: "image_file",
+      content: "",
+      content_type: "image",
+      modified_at_unix_ms: 0,
+      has_mermaid: false,
+      read_chain: []
+    };
+  }
+
+  function fileNameFromPath(path: string | null | undefined) {
+    return (path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
   }
 
   function fileViewId(path: string) {
@@ -1936,14 +2045,19 @@
       directory: false,
       multiple: false,
       title: t.chooseFileTitle,
-      filters: [{ name: "Documents", extensions: ["md", "html", "htm"] }]
+      filters: [
+        {
+          name: "Supported files",
+          extensions: ["md", "html", "htm", ...previewableImageExtensions]
+        }
+      ]
     });
 
     if (typeof selected !== "string") {
       return;
     }
 
-    await openStandaloneDocument(selected);
+    await openStandaloneFile(selected);
   }
 
   async function checkForUpdates(options: CheckUpdateOptions = {}) {
@@ -2175,7 +2289,7 @@
       return;
     }
 
-    void openStandaloneDocument(activeFilePath, "", {
+    void openStandaloneFile(activeFilePath, "", {
       forceReload: true,
       restoreScrollTop: getReaderScrollTop()
     });
@@ -2236,17 +2350,17 @@
       rememberRepoPath(snapshot.root_path);
       status = "ready";
       const preservedEntry = preservedRelativePath
-        ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath && isRenderableEntry(doc))
+        ? snapshot.docs.find((doc) => doc.relative_path === preservedRelativePath && isInAppOpenableEntry(doc))
         : null;
       const restoredEntry = restoredState?.currentRelativePath
-        ? snapshot.docs.find((doc) => doc.relative_path === restoredState.currentRelativePath && isRenderableEntry(doc))
+        ? snapshot.docs.find((doc) => doc.relative_path === restoredState.currentRelativePath && isInAppOpenableEntry(doc))
         : null;
       const entry = preservedEntry ?? restoredEntry ??
         snapshot.docs.find((doc) => doc.relative_path === "README.md" && isRenderableEntry(doc)) ??
         snapshot.docs.find((doc) => doc.relative_path === "baseline/README.md" && isRenderableEntry(doc)) ??
         snapshot.docs.find(isRenderableEntry);
       if (entry) {
-        await openDocument(entry.path, {
+        await openRepoEntry(entry.path, entry.content_type, {
           restoreScrollTop: preservedEntry
             ? preservedScrollTop
             : restoredEntry
@@ -2285,15 +2399,23 @@
     return document.querySelector<HTMLElement>(".reader")?.scrollTop ?? 0;
   }
 
-  async function openRepoEntry(path: string, contentType: IndexedContentType | null = null) {
+  async function openRepoEntry(
+    path: string,
+    contentType: IndexedContentType | null = null,
+    options: OpenDocumentOptions = {}
+  ) {
     const entry = findRepoEntryByPath(path);
     const resolvedContentType = contentType ?? entry?.content_type ?? null;
     if (resolvedContentType === "asset") {
+      if (entry && isPreviewableImageEntry(entry)) {
+        await openImageAsset(entry, options);
+        return;
+      }
       await openAssetPath(entry?.path ?? path);
       return;
     }
 
-    await openDocument(entry?.path ?? path);
+    await openDocument(entry?.path ?? path, options);
   }
 
   async function openDocument(path: string, options: OpenDocumentOptions = {}) {
@@ -2339,7 +2461,57 @@
     return snapshot.docs.find((doc) => normalizePathname(doc.path) === normalized) ?? null;
   }
 
+  async function openImageAsset(entry: DocMeta, options: OpenDocumentOptions = {}) {
+    if (!repoPath) {
+      status = "idle";
+      return;
+    }
+
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
+    upsertOpenView(createRepoView(repoPath));
+    activeViewId = repoViewId;
+    status = "opening";
+    error = "";
+    try {
+      repoCurrent = createImageDocumentFromEntry(entry);
+      current = repoCurrent;
+      restoreAnnotationModeForDocument(repoCurrent);
+      renderDocumentContent(repoCurrent);
+      status = "ready";
+      await completeRenderedDocumentUpdate();
+      if (options.restoreScrollTop !== undefined) {
+        restoreReaderScrollTop(options.restoreScrollTop);
+      }
+      saveCurrentRepoViewState(options.restoreScrollTop ?? getReaderScrollTop());
+      recordNavigationEntry();
+    } catch (err) {
+      error = String(err);
+      status = "error";
+    }
+  }
+
   async function openAssetPath(path: string) {
+    try {
+      const entry = findRepoEntryByPath(path);
+      if (entry && isPreviewableImageEntry(entry)) {
+        await openImageAsset(entry);
+        return;
+      }
+      if (isPreviewableImagePath(path)) {
+        await openStandaloneImage(path);
+        return;
+      }
+
+      await openExternalPath(path);
+    } catch (err) {
+      console.warn("Open asset failed", err);
+      showUpdateToast(`${t.openAssetFailed}: ${getErrorMessage(err)}`, "error");
+    }
+  }
+
+  async function openExternalPath(path: string) {
     try {
       if (isTauri()) {
         await openPath(path);
@@ -2351,8 +2523,55 @@
         throw new Error("Browser blocked the popup");
       }
     } catch (err) {
-      console.warn("Open asset failed", err);
+      console.warn("Open external file failed", err);
       showUpdateToast(`${t.openAssetFailed}: ${getErrorMessage(err)}`, "error");
+    }
+  }
+
+  async function openStandaloneFile(path: string, anchor = "", options: OpenDocumentOptions = {}) {
+    if (isPreviewableImagePath(path)) {
+      await openStandaloneImage(path, options);
+      return;
+    }
+
+    await openStandaloneDocument(path, anchor, options);
+  }
+
+  async function openStandaloneImage(path: string, options: OpenDocumentOptions = {}) {
+    if (!isRestoringNavigation) {
+      updateCurrentHistoryScroll();
+    }
+    const existing = findFileView(path);
+    if (existing && fileDocuments.has(existing.id) && !options.forceReload) {
+      await activateView(existing.id);
+      if (options.restoreScrollTop !== undefined) {
+        restoreReaderScrollTop(options.restoreScrollTop);
+      }
+      return;
+    }
+
+    status = "opening";
+    error = "";
+    try {
+      const doc = createStandaloneImageDocument(path);
+      const view = createFileView(doc);
+      const nextFileDocuments = new Map(fileDocuments);
+      nextFileDocuments.set(view.id, doc);
+      fileDocuments = nextFileDocuments;
+      upsertOpenView(view);
+      activeViewId = view.id;
+      current = doc;
+      restoreAnnotationModeForDocument(doc);
+      renderDocumentContent(doc);
+      status = "ready";
+      await completeRenderedDocumentUpdate();
+      if (options.restoreScrollTop !== undefined) {
+        restoreReaderScrollTop(options.restoreScrollTop);
+      }
+      recordNavigationEntry();
+    } catch (err) {
+      error = String(err);
+      status = "error";
     }
   }
 
@@ -2491,18 +2710,24 @@
 
   async function restoreNavigationEntry(entry: NavigationEntry) {
     if (entry.type === "file") {
-      await openStandaloneDocument(entry.path, "", { restoreScrollTop: entry.scrollTop });
+      await openStandaloneFile(entry.path, "", { restoreScrollTop: entry.scrollTop });
       return;
     }
 
     if (entry.repoPath && normalizePathname(repoPath) !== normalizePathname(entry.repoPath)) {
       await loadRepo(entry.repoPath);
     }
-    await openDocument(entry.path, { restoreScrollTop: entry.scrollTop });
+    const repoEntry = findRepoEntryByPath(entry.path);
+    await openRepoEntry(entry.path, repoEntry?.content_type ?? null, { restoreScrollTop: entry.scrollTop });
   }
 
   function clearRenderedDocument() {
     renderedHtml = "";
+    imagePreviewSrc = "";
+    imageLoadFailed = false;
+    svgPreviewHtml = "";
+    svgPreviewStatus = "idle";
+    svgPreviewError = "";
     activeRendererId = "";
     htmlFrameSrcdoc = "";
     htmlDocHeadings = [];
@@ -2523,6 +2748,11 @@
     activeRendererId = "markdown";
     htmlFrameSrcdoc = "";
     htmlDocHeadings = [];
+    imagePreviewSrc = "";
+    imageLoadFailed = false;
+    svgPreviewHtml = "";
+    svgPreviewStatus = "idle";
+    svgPreviewError = "";
     renderedHtml = markdown.render(document.content, createRenderEnv(document));
   }
 
@@ -2567,6 +2797,11 @@
     teardownHtmlFrameBridge({ keepFrame: true });
     activeRendererId = "html";
     renderedHtml = "";
+    imagePreviewSrc = "";
+    imageLoadFailed = false;
+    svgPreviewHtml = "";
+    svgPreviewStatus = "idle";
+    svgPreviewError = "";
     htmlDocHeadings = [];
     prepareHtmlFrameReady();
     htmlFrameSrcdoc = buildHtmlFrameSrcdoc(document);
@@ -2579,6 +2814,147 @@
 
   function getHtmlDocumentHeadings() {
     return htmlDocHeadings;
+  }
+
+  function renderImageDocument(document: Document) {
+    teardownHtmlFrameBridge();
+    activeRendererId = "image";
+    renderedHtml = "";
+    htmlFrameSrcdoc = "";
+    htmlDocHeadings = [];
+    imageLoadFailed = false;
+    svgPreviewHtml = "";
+    svgPreviewStatus = isSvgDocument(document) ? "loading" : "idle";
+    svgPreviewError = "";
+    try {
+      imagePreviewSrc = isTauri()
+        ? appendLocalAssetCacheBuster(convertFileSrc(document.path), "")
+        : document.path;
+    } catch {
+      imagePreviewSrc = "";
+      imageLoadFailed = true;
+    }
+  }
+
+  async function completeImageRenderedDocumentUpdate(document: Document) {
+    if (isSvgDocument(document)) {
+      await loadSvgPreview(document);
+      await tick();
+      if (readerElement) {
+        await waitForImagesReady(readerElement);
+      }
+      return;
+    }
+
+    if (readerElement) {
+      await waitForImagesReady(readerElement);
+    }
+  }
+
+  function getImageDocumentHeadings(): DocHeading[] {
+    return [];
+  }
+
+  function getImageCoveredNodes(): AnnotationCoveredNode[] {
+    return [];
+  }
+
+  function clearImageFindHighlights() {
+    return;
+  }
+
+  function highlightImageReaderMatches(): HTMLElement[] {
+    return [];
+  }
+
+  function setActiveImageFindMatch() {
+    return;
+  }
+
+  function findImageReaderAnchor() {
+    return null;
+  }
+
+  async function loadSvgPreview(document: Document) {
+    const expectedPath = normalizePathname(document.path);
+    svgPreviewStatus = "loading";
+    svgPreviewError = "";
+    svgPreviewHtml = "";
+
+    try {
+      if (!isTauri()) {
+        throw new Error("SVG preview is only available in the desktop app");
+      }
+
+      const source = await invoke<string>("read_svg_file", { path: document.path });
+      if (!current || normalizePathname(current.path) !== expectedPath) {
+        return;
+      }
+
+      const previewHtml = sanitizeSvgPreviewMarkup(source);
+      if (!current || normalizePathname(current.path) !== expectedPath) {
+        return;
+      }
+
+      svgPreviewHtml = previewHtml;
+      svgPreviewStatus = "ready";
+      svgPreviewError = "";
+    } catch (err) {
+      if (!current || normalizePathname(current.path) !== expectedPath) {
+        return;
+      }
+
+      svgPreviewHtml = "";
+      svgPreviewStatus = "error";
+      svgPreviewError = getErrorMessage(err);
+      imageLoadFailed = true;
+    }
+  }
+
+  function sanitizeSvgPreviewMarkup(source: string) {
+    const parser = new DOMParser();
+    const document = parser.parseFromString(source, "image/svg+xml");
+    const parseError = document.querySelector("parsererror");
+    if (parseError) {
+      throw new Error(parseError.textContent?.trim() || "Invalid SVG");
+    }
+
+    const svg = document.documentElement;
+    if (!svg || svg.tagName.toLowerCase() !== "svg") {
+      throw new Error("SVG root element not found");
+    }
+
+    sanitizeSvgElement(svg);
+    svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    svg.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    svg.setAttribute("class", `${svg.getAttribute("class") ?? ""} svg-preview-inline`.trim());
+    svg.setAttribute("role", "img");
+    if (!svg.getAttribute("aria-label")) {
+      svg.setAttribute("aria-label", current?.title ?? "SVG preview");
+    }
+
+    return new XMLSerializer().serializeToString(svg);
+  }
+
+  function sanitizeSvgElement(root: Element) {
+    root.querySelectorAll("script, iframe, object, embed").forEach((element) => element.remove());
+    const elements = [root, ...root.querySelectorAll<Element>("*")];
+    for (const element of elements) {
+      for (const attribute of Array.from(element.attributes)) {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim();
+        if (name.startsWith("on") || isUnsafeSvgUrlAttribute(name, value)) {
+          element.removeAttribute(attribute.name);
+        }
+      }
+    }
+  }
+
+  function isUnsafeSvgUrlAttribute(name: string, value: string) {
+    if (!["href", "xlink:href", "src"].includes(name)) {
+      return false;
+    }
+    return /^javascript:/i.test(value) || /^data:text\/html/i.test(value);
   }
 
   function buildHtmlFrameSrcdoc(document: Document) {
@@ -3335,7 +3711,7 @@
 
   function getFrameDiagramSvg(button: HTMLButtonElement) {
     const frame = button.closest<HTMLElement>(".diagram-frame");
-    return frame?.querySelector<SVGSVGElement>(".mermaid svg") ?? null;
+    return frame?.querySelector<SVGSVGElement>(".mermaid svg, .svg-preview-content > svg") ?? null;
   }
 
   async function copyMermaidFixPrompt(button: HTMLButtonElement) {
@@ -3473,11 +3849,12 @@
 
     event.preventDefault();
     if (target.type === "file") {
-      await openStandaloneDocument(target.path, target.anchor);
+      await openStandaloneFile(target.path, target.anchor);
       return true;
     }
 
-    await openDocument(target.path);
+    const repoEntry = findRepoEntryByPath(target.path);
+    await openRepoEntry(target.path, repoEntry?.content_type ?? null);
     if (target.anchor) {
       await scrollToReaderAnchor(target.anchor);
     }
@@ -3569,11 +3946,12 @@
     }
 
     if (resolved.type === "file") {
-      await openStandaloneDocument(resolved.path, resolved.anchor);
+      await openStandaloneFile(resolved.path, resolved.anchor);
       return;
     }
 
-    await openDocument(resolved.path);
+    const repoEntry = findRepoEntryByPath(resolved.path);
+    await openRepoEntry(resolved.path, repoEntry?.content_type ?? null);
     if (resolved.anchor) {
       await scrollToReaderAnchor(resolved.anchor);
     }
@@ -3905,7 +4283,7 @@
   }
 
   async function openFind() {
-    if (!current) {
+    if (!current || !isFindableDocument(current)) {
       return;
     }
 
@@ -4114,7 +4492,7 @@
   }
 
   function toggleAnnotationMode() {
-    if (!current || annotationExporting) {
+    if (!current || !isAnnotatableDocument(current) || annotationExporting) {
       return;
     }
 
@@ -4128,7 +4506,13 @@
   }
 
   function handleReaderPointerDown(event: PointerEvent) {
-    if (!annotationMode || !current || !readerElement || event.button !== 0) {
+    if (
+      !annotationMode ||
+      !current ||
+      !isAnnotatableDocument(current) ||
+      !readerElement ||
+      event.button !== 0
+    ) {
       return;
     }
 
@@ -4593,6 +4977,10 @@
 
   async function finishCurrentPageAnnotations() {
     const exportDocumentKey = currentDocumentKey;
+    if (!current || !isAnnotatableDocument(current)) {
+      showUpdateToast(t.annotationNoAnnotations, "error");
+      return;
+    }
     if (!currentAnnotations.length) {
       showUpdateToast(t.annotationNoAnnotations, "error");
       return;
@@ -6333,7 +6721,7 @@
           class="ghost annotation-toggle"
           class:active={annotationMode}
           type="button"
-          disabled={!current || annotationExporting}
+          disabled={!canAnnotateCurrent || annotationExporting}
           aria-pressed={annotationMode}
           aria-label={annotationModeButtonLabel}
           title={annotationModeButtonLabel}
@@ -6352,7 +6740,7 @@
         <button
           class="primary annotation-finish"
           type="button"
-          disabled={!current || !currentAnnotations.length || annotationExporting}
+          disabled={!canAnnotateCurrent || !currentAnnotations.length || annotationExporting}
           aria-label={finishAnnotationButtonLabel}
           title={finishAnnotationButtonLabel}
           on:click={finishCurrentPageAnnotations}
@@ -6365,7 +6753,7 @@
         <button
           class="ghost annotation-archives-button"
           type="button"
-          disabled={!current || annotationExporting}
+          disabled={!canAnnotateCurrent || annotationExporting}
           aria-label={annotationArchivesButtonLabel}
           title={annotationArchivesButtonLabel}
           on:click={openAnnotationArchives}
@@ -6383,7 +6771,7 @@
         <button
           class="ghost icon-button"
           type="button"
-          disabled={!current}
+          disabled={!canFindCurrent}
           aria-label={t.findDocument}
           title={t.findDocument}
           on:click={openFind}
@@ -6476,6 +6864,7 @@
           class:annotating={annotationMode}
           class:capturing={annotationCaptureHidden}
           class:html-document={activeRendererId === "html"}
+          class:image-document={activeRendererId === "image"}
           bind:this={readerElement}
           on:wheel|nonpassive={handleReaderWheel}
           on:pointerdown={handleReaderPointerDown}
@@ -6493,6 +6882,60 @@
               bind:this={htmlFrameElement}
               on:load={handleHtmlFrameLoad}
             ></iframe>
+          {:else if activeRendererId === "image"}
+            <div class="image-preview-shell">
+              <div class="image-preview-actions">
+                <button
+                  class="ghost icon-button"
+                  type="button"
+                  disabled={!current?.path}
+                  aria-label={t.openExternalFile}
+                  title={t.openExternalFile}
+                  on:click={() => current?.path && openExternalPath(current.path)}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M14 4h6v6" />
+                    <path d="M20 4 10 14" />
+                    <path d="M12 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+                  </svg>
+                </button>
+              </div>
+              <div class="image-preview-canvas">
+                {#if isSvgDocument(current) && svgPreviewStatus === "ready" && svgPreviewHtml}
+                  <figure class="diagram-frame svg-preview-frame">
+                    <div class="diagram-actions">
+                      <button
+                        class="diagram-copy"
+                        type="button"
+                        aria-label={t.copyDiagram}
+                        title={t.copyDiagram}
+                      ></button>
+                      <button
+                        class="diagram-zoom"
+                        type="button"
+                        aria-label={t.enlargeDiagram}
+                        title={t.enlargeDiagram}
+                      ></button>
+                    </div>
+                    <div class="svg-preview-content">
+                      {@html svgPreviewHtml}
+                    </div>
+                  </figure>
+                {:else if imagePreviewSrc && !imageLoadFailed}
+                  <img
+                    class="image-preview"
+                    src={imagePreviewSrc}
+                    alt={current.title}
+                    on:load={() => (imageLoadFailed = false)}
+                    on:error={() => (imageLoadFailed = true)}
+                  />
+                {:else}
+                  <div class="image-preview-error" role="status">
+                    {t.imageLoadFailed}{svgPreviewError ? `: ${svgPreviewError}` : ""}
+                  </div>
+                {/if}
+              </div>
+            </div>
           {:else}
             {@html renderedHtml}
           {/if}

@@ -1090,12 +1090,85 @@ h1 {
   padding: 0;
 }
 
+.reader.image-document {
+  padding: 0;
+  background: #efefeb;
+}
+
 .html-reader-frame {
   display: block;
   width: 100%;
   min-height: 100%;
   border: 0;
   background: #ffffff;
+}
+
+.image-preview-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100%;
+}
+
+.image-preview-actions {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  border-bottom: 1px solid rgba(213, 213, 207, 0.78);
+  background: rgba(247, 247, 244, 0.92);
+  padding: 10px 14px;
+  backdrop-filter: blur(8px);
+}
+
+.image-preview-canvas {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  padding: 24px;
+}
+
+.image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 198px);
+  border: 1px solid #d9d9d2;
+  border-radius: 7px;
+  background: #ffffff;
+  object-fit: contain;
+  box-shadow: 0 14px 38px rgba(31, 41, 51, 0.12);
+}
+
+.reader .svg-preview-frame {
+  width: min(100%, 1200px);
+  margin: 0;
+}
+
+.svg-preview-content {
+  display: grid;
+  overflow: auto;
+  max-height: calc(100vh - 198px);
+  place-items: center;
+  border: 1px solid #d9d9d2;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 14px 38px rgba(31, 41, 51, 0.12);
+}
+
+.svg-preview-content > svg {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 232px);
+  background: #ffffff;
+}
+
+.image-preview-error {
+  border: 1px solid #efc7be;
+  border-radius: 7px;
+  background: #fff6f4;
+  color: #8d2f25;
+  padding: 10px 12px;
 }
 
 .reader.annotating .html-reader-frame,

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "memView",
-  "version": "0.2.45",
+  "version": "0.2.46",
   "identifier": "io.github.user554943871.memview",
   "build": {
     "beforeDevCommand": "npm run dev:web",
@@ -61,6 +61,15 @@
         "mimeType": "text/html",
         "rank": "Alternate",
         "contentTypes": ["public.html"]
+      },
+      {
+        "ext": ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"],
+        "name": "Image File",
+        "description": "Image file",
+        "role": "Viewer",
+        "mimeType": "image/*",
+        "rank": "Alternate",
+        "contentTypes": ["public.image"]
       }
     ],
     "icon": [

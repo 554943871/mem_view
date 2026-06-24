@@ -356,6 +356,14 @@ fn read_markdown_file(path: String) -> Result<Document, String> {
 }
 
 #[tauri::command]
+fn read_svg_file(path: String) -> Result<String, String> {
+    let requested = PathBuf::from(path.trim());
+    let requested = canonical_readable_svg_file(&requested)?;
+    fs::read_to_string(&requested)
+        .map_err(|err| format!("读取 SVG 失败：{} ({})", requested.display(), err))
+}
+
+#[tauri::command]
 fn take_pending_open_files(
     state: tauri::State<'_, PendingOpenFiles>,
 ) -> Result<Vec<String>, String> {
@@ -1574,6 +1582,19 @@ fn canonical_readable_document_file(requested: &Path) -> Result<PathBuf, String>
     Ok(canonical)
 }
 
+fn canonical_readable_svg_file(requested: &Path) -> Result<PathBuf, String> {
+    let canonical = requested
+        .canonicalize()
+        .map_err(|err| format!("SVG 文件不存在或不可读：{} ({})", requested.display(), err))?;
+    if !canonical.is_file() {
+        return Err(format!("SVG 路径不是文件：{}", canonical.display()));
+    }
+    if !is_svg_path(&canonical) {
+        return Err(format!("只能读取 SVG 文件：{}", canonical.display()));
+    }
+    Ok(canonical)
+}
+
 fn system_open_document_paths_from_args(args: impl IntoIterator<Item = OsString>) -> Vec<String> {
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     args.into_iter()
@@ -1597,7 +1618,7 @@ fn system_open_document_path_from_arg(arg: OsString, current_dir: &Path) -> Opti
 }
 
 fn system_open_document_path(path: PathBuf) -> Option<String> {
-    let canonical = canonical_readable_document_file(&path).ok()?;
+    let canonical = canonical_readable_open_file(&path).ok()?;
     Some(canonical.to_string_lossy().to_string())
 }
 
@@ -1659,8 +1680,39 @@ fn document_content_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn canonical_readable_open_file(requested: &Path) -> Result<PathBuf, String> {
+    let canonical = requested
+        .canonicalize()
+        .map_err(|err| format!("文件不存在或不可读：{} ({})", requested.display(), err))?;
+    if !canonical.is_file() {
+        return Err(format!("路径不是文件：{}", canonical.display()));
+    }
+    if document_content_type(&canonical).is_none() && !is_previewable_image_path(&canonical) {
+        return Err(format!("只能打开 Markdown、HTML 或图片文件：{}", canonical.display()));
+    }
+    Ok(canonical)
+}
+
 fn indexed_file_content_type(path: &Path) -> Option<&'static str> {
     document_content_type(path).or_else(|| asset_content_type(path))
+}
+
+fn is_previewable_image_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp"
+    )
+}
+
+fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false)
 }
 
 fn asset_content_type(path: &Path) -> Option<&'static str> {
@@ -1844,6 +1896,7 @@ pub fn run() {
             read_document,
             read_standalone_document,
             read_markdown_file,
+            read_svg_file,
             finish_annotation_export,
             list_annotation_archives,
             read_annotation_archive,
@@ -2118,12 +2171,42 @@ mod tests {
     }
 
     #[test]
+    fn reads_standalone_svg_file() {
+        let root = build_temp_dir("standalone-svg");
+        fs::create_dir_all(&root).expect("standalone SVG test dir should create");
+        let path = root.join("diagram.svg");
+        fs::write(&path, "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect /></svg>\n")
+            .expect("SVG file should write");
+
+        let content = read_svg_file(path.to_string_lossy().to_string())
+            .expect("SVG file should read");
+
+        assert!(content.contains("<svg"));
+        assert!(content.contains("<rect"));
+    }
+
+    #[test]
+    fn rejects_non_svg_file_for_svg_read() {
+        let root = build_temp_dir("svg-read-unsupported");
+        fs::create_dir_all(&root).expect("SVG unsupported test dir should create");
+        let path = root.join("note.txt");
+        fs::write(&path, "not svg").expect("text file should write");
+
+        let err = read_svg_file(path.to_string_lossy().to_string())
+            .expect_err("unsupported SVG read should be rejected");
+
+        assert!(err.contains("只能读取 SVG 文件"));
+    }
+
+    #[test]
     fn resolves_system_open_document_paths_from_args() {
         let root = build_temp_dir("system-open-args");
         fs::create_dir_all(&root).expect("system open test dir should create");
         let markdown_path = root.join("direct.md");
+        let image_path = root.join("diagram.png");
         let text_path = root.join("note.txt");
         fs::write(&markdown_path, "# Direct\n").expect("markdown file should write");
+        fs::write(&image_path, b"image").expect("image file should write");
         fs::write(&text_path, "not markdown").expect("text file should write");
 
         assert_eq!(
@@ -2140,14 +2223,22 @@ mod tests {
             system_open_document_paths_from_args(vec![
                 OsString::from("-psn_0_123"),
                 markdown_path.clone().into_os_string(),
+                image_path.clone().into_os_string(),
                 text_path.into_os_string(),
                 OsString::from("--flag")
             ]),
-            vec![markdown_path
-                .canonicalize()
-                .expect("markdown path should canonicalize")
-                .to_string_lossy()
-                .to_string()]
+            vec![
+                markdown_path
+                    .canonicalize()
+                    .expect("markdown path should canonicalize")
+                    .to_string_lossy()
+                    .to_string(),
+                image_path
+                    .canonicalize()
+                    .expect("image path should canonicalize")
+                    .to_string_lossy()
+                    .to_string()
+            ]
         );
     }
 
@@ -2156,16 +2247,28 @@ mod tests {
         let root = build_temp_dir("system-open-urls");
         fs::create_dir_all(&root).expect("system open test dir should create");
         let path = root.join("direct.html");
+        let svg_path = root.join("diagram.svg");
         fs::write(&path, "<!doctype html><title>Direct</title>\n")
             .expect("html file should write");
+        fs::write(&svg_path, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>\n")
+            .expect("svg file should write");
         let canonical = path
             .canonicalize()
             .expect("html path should canonicalize")
             .to_string_lossy()
             .to_string();
+        let svg_canonical = svg_path
+            .canonicalize()
+            .expect("svg path should canonicalize")
+            .to_string_lossy()
+            .to_string();
         let url = tauri::Url::from_file_path(&path).expect("file URL should build");
+        let svg_url = tauri::Url::from_file_path(&svg_path).expect("SVG file URL should build");
 
-        assert_eq!(system_open_document_paths_from_urls(vec![url]), vec![canonical]);
+        assert_eq!(
+            system_open_document_paths_from_urls(vec![url, svg_url]),
+            vec![canonical, svg_canonical]
+        );
     }
 
     #[test]

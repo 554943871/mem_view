@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.46
+
+- Added in-app browsing for local image and SVG files from the repository tree, document links, drag-and-drop, and standalone file opening.
+- Added Mermaid-style SVG preview controls for SVG files, including enlarge, fit, zoom, pan, and copy-image support.
+- Added macOS file association and native open-file handling for common image and SVG formats.
+
 ## v0.2.45
 
 - Renamed the Simplified Chinese Quick switch action from "打开新记忆库" to "打开新仓库" for clearer repository switching.
