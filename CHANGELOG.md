@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.49
+
+- Added line-numbered Markdown code blocks with hover row highlighting to help align fields with inline comments.
+- Added JSON/JSONC syntax coloring for Markdown code blocks.
+- Fixed Pull & Refresh so a failed `git pull --ff-only` keeps the error visible but continues reading local repository files.
+
 ## v0.2.48
 
 - Fixed standalone Markdown images so long-pressing or dragging an embedded SVG image does not start the native file-drag interaction.

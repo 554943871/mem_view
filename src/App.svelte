@@ -393,6 +393,7 @@
     annotationArchiveCopyFailed: string;
     annotationArchiveMissingScreenshots: string;
     pullFailed: string;
+    pullFailedLocalFallback: string;
     editAnnotation: string;
     moveAnnotationNote: string;
     collapseAnnotationNote: string;
@@ -544,6 +545,7 @@
       annotationArchiveCopyFailed: "归档提示词复制失败",
       annotationArchiveMissingScreenshots: "截图不可用",
       pullFailed: "Git 拉取失败",
+      pullFailedLocalFallback: "已继续读取本地内容。",
       editAnnotation: "编辑标注备注",
       moveAnnotationNote: "拖动标注备注",
       collapseAnnotationNote: "收起标注备注",
@@ -711,6 +713,7 @@
       annotationArchiveCopyFailed: "Failed to copy archive prompt",
       annotationArchiveMissingScreenshots: "Screenshots unavailable",
       pullFailed: "Git pull failed",
+      pullFailedLocalFallback: "Continued reading local files.",
       editAnnotation: "Edit annotation note",
       moveAnnotationNote: "Move annotation note",
       collapseAnnotationNote: "Collapse annotation note",
@@ -1000,6 +1003,7 @@
   let activeFindIndex = 0;
   let findInput: HTMLInputElement | null = null;
   let readerElement: HTMLElement | null = null;
+  let hoveredCodeLineElement: HTMLElement | null = null;
   let annotationMode = false;
   let annotationDraft: AnnotationDraft | null = null;
   let annotationPointerId: number | null = null;
@@ -2335,9 +2339,7 @@
       try {
         await invoke<GitPullResult>("pull_repo", { repoPath: nextRepoPath });
       } catch (err) {
-        error = `${t.pullFailed}: ${getErrorMessage(err)}`;
-        status = "error";
-        return;
+        error = `${t.pullFailed}: ${getErrorMessage(err)} ${t.pullFailedLocalFallback}`;
       }
     }
 
@@ -2725,6 +2727,7 @@
   }
 
   function clearRenderedDocument() {
+    clearHoveredCodeLine();
     renderedHtml = "";
     imagePreviewSrc = "";
     imageLoadFailed = false;
@@ -2747,6 +2750,7 @@
   }
 
   function renderMarkdownDocument(document: Document) {
+    clearHoveredCodeLine();
     teardownHtmlFrameBridge();
     activeRendererId = "markdown";
     htmlFrameSrcdoc = "";
@@ -3510,7 +3514,120 @@
     const lang = info.split(/\s+/)[0]?.trim();
     const className = lang ? ` class="language-${escapeHtml(lang)}"` : "";
     const attrs = sourceTokenAttrs(token, "code_block", env);
-    return `<pre${attrs}><code${className}>${escapeHtml(token.content)}</code></pre>\n`;
+    const lines = renderCodeLines(token.content, lang);
+    return `<pre class="reader-code-block"${attrs}><code${className}>${lines}</code></pre>\n`;
+  }
+
+  function renderCodeLines(content: string, lang: string) {
+    const normalized = content.replace(/\r\n?/g, "\n");
+    const lineHtml = isJsonLikeLanguage(lang)
+      ? renderJsonCodeLines(normalized)
+      : normalized.split("\n").map(escapeHtml);
+    return lineHtml
+      .map((line) => `<span class="code-line"><span class="code-line-content">${line}</span></span>`)
+      .join("");
+  }
+
+  function isJsonLikeLanguage(lang: string) {
+    return /^(json|jsonc)$/i.test(lang);
+  }
+
+  function renderJsonCodeLines(content: string) {
+    const lines = content.split("\n");
+    let inBlockComment = false;
+
+    return lines.map((line) => {
+      let html = "";
+      let index = 0;
+
+      while (index < line.length) {
+        if (inBlockComment) {
+          const endIndex = line.indexOf("*/", index);
+          const commentEnd = endIndex >= 0 ? endIndex + 2 : line.length;
+          html += renderCodeTokenSpan("comment", line.slice(index, commentEnd));
+          index = commentEnd;
+          inBlockComment = endIndex < 0;
+          continue;
+        }
+
+        const rest = line.slice(index);
+        if (rest.startsWith("//")) {
+          html += renderCodeTokenSpan("comment", rest);
+          break;
+        }
+
+        if (rest.startsWith("/*")) {
+          const endIndex = line.indexOf("*/", index + 2);
+          const commentEnd = endIndex >= 0 ? endIndex + 2 : line.length;
+          html += renderCodeTokenSpan("comment", line.slice(index, commentEnd));
+          index = commentEnd;
+          inBlockComment = endIndex < 0;
+          continue;
+        }
+
+        const char = line[index];
+        if (char === "\"") {
+          const endIndex = findJsonStringEnd(line, index);
+          const value = line.slice(index, endIndex);
+          const tokenType = isJsonKey(line, endIndex) ? "key" : "string";
+          html += renderCodeTokenSpan(tokenType, value);
+          index = endIndex;
+          continue;
+        }
+
+        const numberMatch = rest.match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+        if (numberMatch) {
+          html += renderCodeTokenSpan("number", numberMatch[0]);
+          index += numberMatch[0].length;
+          continue;
+        }
+
+        const literalMatch = rest.match(/^(true|false|null)\b/);
+        if (literalMatch) {
+          html += renderCodeTokenSpan("literal", literalMatch[0]);
+          index += literalMatch[0].length;
+          continue;
+        }
+
+        if (/^[{}\[\]:,]$/.test(char)) {
+          html += renderCodeTokenSpan("punctuation", char);
+          index += 1;
+          continue;
+        }
+
+        html += escapeHtml(char);
+        index += 1;
+      }
+
+      return html;
+    });
+  }
+
+  function findJsonStringEnd(line: string, startIndex: number) {
+    let escaped = false;
+    for (let index = startIndex + 1; index < line.length; index += 1) {
+      const char = line[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === "\"") {
+        return index + 1;
+      }
+    }
+    return line.length;
+  }
+
+  function isJsonKey(line: string, stringEndIndex: number) {
+    return line.slice(stringEndIndex).trimStart().startsWith(":");
+  }
+
+  function renderCodeTokenSpan(type: string, value: string) {
+    return `<span class="code-token code-token-${type}">${escapeHtml(value)}</span>`;
   }
 
   function escapeHtml(value: string) {
@@ -4631,6 +4748,8 @@
   }
 
   function handleReaderPointerMove(event: PointerEvent) {
+    syncHoveredCodeLine(event);
+
     if (!annotationDraft || !readerElement || annotationPointerId !== event.pointerId) {
       return;
     }
@@ -4641,6 +4760,27 @@
       ...annotationDraft,
       rect: createAnnotationRect(annotationDraft.startX, annotationDraft.startY, point.x, point.y)
     };
+  }
+
+  function syncHoveredCodeLine(event: PointerEvent) {
+    const target = event.target;
+    const codeLine = target instanceof Element
+      ? target.closest<HTMLElement>(".reader-code-block .code-line")
+      : null;
+    setHoveredCodeLine(codeLine);
+  }
+
+  function setHoveredCodeLine(nextLine: HTMLElement | null) {
+    if (hoveredCodeLineElement === nextLine) {
+      return;
+    }
+    hoveredCodeLineElement?.classList.remove("hovered");
+    hoveredCodeLineElement = nextLine;
+    hoveredCodeLineElement?.classList.add("hovered");
+  }
+
+  function clearHoveredCodeLine() {
+    setHoveredCodeLine(null);
   }
 
   function handleReaderPointerUp(event: PointerEvent) {
