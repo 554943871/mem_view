@@ -2381,11 +2381,14 @@ h1 {
   overflow: hidden;
   padding: 0;
   touch-action: none;
-  user-select: none;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .diagram-modal-body.panning {
   cursor: grabbing;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .diagram-canvas {
@@ -2397,6 +2400,8 @@ h1 {
   box-shadow: none;
   padding: 0;
   transform-origin: 0 0;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .diagram-canvas svg {
@@ -2404,6 +2409,16 @@ h1 {
   max-width: none;
   height: auto;
   background: #ffffff;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.diagram-canvas text,
+.diagram-canvas tspan,
+.diagram-canvas foreignObject {
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .diagram-canvas .zoomed-reader-image {

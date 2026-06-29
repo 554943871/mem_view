@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.50
+
+- Fixed enlarged SVG and Mermaid diagram views so node and label text can be selected while still allowing drag-to-pan from non-text areas.
+
 ## v0.2.49
 
 - Added line-numbered Markdown code blocks with hover row highlighting to help align fields with inline comments.

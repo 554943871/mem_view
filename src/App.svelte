@@ -6646,8 +6646,7 @@
   }
 
   function startPan(event: PointerEvent) {
-    const target = event.target as HTMLElement;
-    if (target.closest(".diagram-tools")) {
+    if (!shouldStartDiagramPan(event)) {
       return;
     }
 
@@ -6657,6 +6656,23 @@
     panOriginX = panX;
     panOriginY = panY;
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function shouldStartDiagramPan(event: PointerEvent) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return true;
+    }
+
+    if (target.closest(".diagram-tools")) {
+      return false;
+    }
+
+    return !target.closest("text,tspan,foreignObject,a,input,textarea,button,[contenteditable='true']");
   }
 
   function movePan(event: PointerEvent) {
