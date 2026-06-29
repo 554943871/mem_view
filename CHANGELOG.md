@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.51
+
+- Added hover tooltips for local Markdown links so repository and standalone file links show the target file name without changing external links or existing link titles.
+
 ## v0.2.50
 
 - Fixed enlarged SVG and Mermaid diagram views so node and label text can be selected while still allowing drag-to-pan from non-text areas.

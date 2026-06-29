@@ -83,6 +83,8 @@
     headingCounts: Map<string, number>;
     nodeCounts: Map<string, number>;
     documentPath: string;
+    relativePath: string;
+    viewType: ViewType | "";
   };
   type DocumentRenderer = {
     id: DocumentContentType;
@@ -768,6 +770,7 @@
   const defaultTableOpenRenderer = markdown.renderer.rules.table_open;
   const defaultTableCloseRenderer = markdown.renderer.rules.table_close;
   const defaultTableRowOpenRenderer = markdown.renderer.rules.tr_open;
+  const defaultLinkOpenRenderer = markdown.renderer.rules.link_open;
   const defaultImageRenderer = markdown.renderer.rules.image;
   const defaultTextRenderer = markdown.renderer.rules.text;
 
@@ -826,6 +829,21 @@
     annotateSourceToken(tokens[index], "table_row", env as MarkdownRenderEnv);
     return defaultTableRowOpenRenderer
       ? defaultTableRowOpenRenderer(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
+  };
+
+  markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const href = token.attrGet("href")?.trim() ?? "";
+    if (href && !token.attrGet("title")) {
+      const localFileName = markdownLocalLinkFileName(href, env as MarkdownRenderEnv);
+      if (localFileName) {
+        token.attrSet("title", localFileName);
+      }
+    }
+
+    return defaultLinkOpenRenderer
+      ? defaultLinkOpenRenderer(tokens, index, options, env, self)
       : self.renderToken(tokens, index, options);
   };
 
@@ -3472,7 +3490,9 @@
     return {
       headingCounts: new Map<string, number>(),
       nodeCounts: new Map<string, number>(),
-      documentPath: documentContext?.path ?? ""
+      documentPath: documentContext?.path ?? "",
+      relativePath: documentContext?.relative_path ?? "",
+      viewType: documentContext ? activeView?.type ?? "" : ""
     };
   }
 
@@ -4339,27 +4359,7 @@
       return null;
     }
 
-    if (!pathPart || pathPart === ".") {
-      return current.relative_path;
-    }
-
-    if (pathPart.toLowerCase().startsWith("file:")) {
-      try {
-        return normalizePathname(safeDecodeURIComponent(new URL(pathPart).pathname));
-      } catch {
-        return null;
-      }
-    }
-
-    const decodedPath = normalizePathname(safeDecodeURIComponent(pathPart));
-    if (decodedPath.startsWith("/")) {
-      return decodedPath;
-    }
-
-    const baseDir = current.relative_path.includes("/")
-      ? current.relative_path.slice(0, current.relative_path.lastIndexOf("/") + 1)
-      : "";
-    return normalizePathSegments(`${baseDir}${decodedPath}`);
+    return resolveRepoRelativePathFromDocument(pathPart, current.relative_path);
   }
 
   function resolveStandaloneFilePath(pathPart: string) {
@@ -4367,10 +4367,13 @@
       return null;
     }
 
-    if (!pathPart || pathPart === ".") {
-      return current.path;
-    }
+    return resolveStandaloneFilePathFromDocument(pathPart, current.path);
+  }
 
+  function resolveStandaloneFilePathFromDocument(pathPart: string, documentPath: string) {
+    if (!pathPart || pathPart === ".") {
+      return documentPath;
+    }
     if (pathPart.toLowerCase().startsWith("file:")) {
       try {
         return normalizeAbsolutePathSegments(
@@ -4386,10 +4389,69 @@
       return normalizeAbsolutePathSegments(decodedPath);
     }
 
-    const baseDir = current.path.includes("/")
-      ? current.path.slice(0, current.path.lastIndexOf("/"))
+    const baseDir = documentPath.includes("/")
+      ? documentPath.slice(0, documentPath.lastIndexOf("/"))
       : "";
     return normalizeAbsolutePathSegments(`${baseDir}/${decodedPath}`);
+  }
+
+  function resolveRepoRelativePathFromDocument(pathPart: string, relativePath: string) {
+    if (!relativePath) {
+      return null;
+    }
+
+    if (!pathPart || pathPart === ".") {
+      return relativePath;
+    }
+
+    if (pathPart.toLowerCase().startsWith("file:")) {
+      try {
+        return normalizePathname(safeDecodeURIComponent(new URL(pathPart).pathname));
+      } catch {
+        return null;
+      }
+    }
+
+    const decodedPath = normalizePathname(safeDecodeURIComponent(pathPart));
+    if (decodedPath.startsWith("/")) {
+      return decodedPath;
+    }
+
+    const baseDir = relativePath.includes("/")
+      ? relativePath.slice(0, relativePath.lastIndexOf("/") + 1)
+      : "";
+    return normalizePathSegments(`${baseDir}${decodedPath}`);
+  }
+
+  function markdownLocalLinkFileName(href: string, env: MarkdownRenderEnv) {
+    const targetPath = markdownLocalLinkTargetPath(href, env);
+    return targetPath ? fileNameFromPath(targetPath) : "";
+  }
+
+  function markdownLocalLinkTargetPath(href: string, env: MarkdownRenderEnv) {
+    const value = href.trim();
+    if (!value || value.startsWith("#") || !env.documentPath || isExternalBrowserHref(value)) {
+      return "";
+    }
+
+    const { pathPart } = splitHref(value);
+    if (isExternalHref(pathPart)) {
+      return "";
+    }
+
+    if (env.viewType === "file") {
+      return resolveStandaloneFilePathFromDocument(pathPart, env.documentPath) ?? "";
+    }
+
+    if (env.viewType === "repo") {
+      const normalizedPath = resolveRepoRelativePathFromDocument(pathPart, env.relativePath);
+      if (normalizedPath === null) {
+        return "";
+      }
+      return findDocByLinkPath(normalizedPath)?.path ?? normalizedPath;
+    }
+
+    return "";
   }
 
   function normalizePathname(value: string) {
